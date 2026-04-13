@@ -8,7 +8,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Mechanical Property SPC Dashboard", layout="wide", page_icon="📊")
 
 st.title("📊 Mechanical Property Comprehensive Analysis")
-st.markdown("Hệ thống tự động tính toán Ca, Cp, Cpk và trực quan hóa biểu đồ phân phối & xu hướng tối giản.")
+st.markdown("Hệ thống tự động tính toán SPC và trực quan hóa biểu đồ phân phối & xu hướng chuyên nghiệp.")
 
 # 1. Upload Data
 uploaded_file = st.file_uploader("Tải lên file Excel hoặc CSV", type=['csv', 'xlsx'])
@@ -22,7 +22,7 @@ if uploaded_file:
         
         df.columns = df.columns.str.strip()
 
-        # --- DATA CORRECTIONS (Management Rules) ---
+        # --- DATA CORRECTIONS ---
         if '鋼種' in df.columns:
             df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
         if 'Metallic_Type' in df.columns:
@@ -32,7 +32,7 @@ if uploaded_file:
         col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
-            lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=df['LINE'].dropna().unique())
+            lines = st.multiselect("LINE", options=df['LINE'].dropna().unique(), default=df['LINE'].dropna().unique())
         with col_f2:
             grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
         with col_f3:
@@ -49,7 +49,7 @@ if uploaded_file:
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
 
-        # Identify Target Columns
+        # Identify Targets
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
@@ -71,7 +71,6 @@ if uploaded_file:
                 if i + j < len(available_targets):
                     target_col = available_targets[i + j]
                     with grid_cols[j]:
-                        # Clean data for target
                         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
@@ -81,42 +80,51 @@ if uploaded_file:
                         if len(data_series) < 2: continue
                         
                         mean, std, count = data_series.mean(), data_series.std(), len(data_series)
+                        d_max, d_min = data_series.max(), data_series.min()
                         lsl, usl = specs[target_col]['lsl'], specs[target_col]['usl']
+                        ucl, lcl = mean + 3*std, mean - 3*std
                         cpk = min((usl - mean)/(3*std), (mean - lsl)/(3*std)) if std > 0 else 0
 
-                        # 1. DISTRIBUTION CHART (Standard Stacked)
+                        # 1. DISTRIBUTION CHART (With Mean, Max, Min Annotations)
                         fig_dist = px.histogram(analysis_df, x=target_col, color='鋼種', nbins=20, barmode='stack', color_discrete_sequence=['#1F497D', '#4F81BD', '#8DB4E2'])
                         fig_dist.update_traces(marker_line_color='white', marker_line_width=1, opacity=0.9)
                         
-                        # Add Normal Curve
                         if std > 0:
-                            x_curve = np.linspace(data_series.min() - std, data_series.max() + std, 200)
-                            bin_w = (data_series.max() - data_series.min())/20 if data_series.max() > data_series.min() else 1
+                            x_curve = np.linspace(d_min - std, d_max + std, 200)
+                            bin_w = (d_max - d_min)/20 if d_max > d_min else 1
                             y_curve = norm.pdf(x_curve, mean, std) * count * bin_w
                             fig_dist.add_trace(go.Scatter(x=x_curve, y=y_curve, mode='lines', line=dict(color='#FFB300', width=2), showlegend=False))
 
                         fig_dist.add_vline(x=lsl, line_color="red", line_width=2)
                         fig_dist.add_vline(x=usl, line_color="red", line_width=2)
+                        fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         
+                        # Annotations on Distribution
+                        fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
+                        fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
+                        fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
+
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} Distribution</b>", x=0.5, xanchor='center'),
-                            height=350, plot_bgcolor='white', margin=dict(b=60),
+                            height=380, plot_bgcolor='white', margin=dict(b=60, t=80),
                             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5),
-                            xaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True),
-                            yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True)
+                            xaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0'),
+                            yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
-                        # 2. METRICS CARD (Minimal)
-                        st.markdown(f"**Cpk: {cpk:.3f}** | Mean: {mean:.2f} | Std: {std:.3f} | n: {count}")
+                        # 2. METRICS CARD
+                        status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
+                        st.markdown(f"""
+                        <div style="padding:10px; border-radius:5px; border-left: 5px solid {status_color}; background-color:#f8f9fa; margin-bottom:10px">
+                            <b>Cpk: {cpk:.3f}</b> | Mean: {mean:.2f} | Std: {std:.3f} | n: {count}
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                        # 3. TRENDING CHART (MINIMAL: MAX, MEAN, MIN ONLY)
+                        # 3. TRENDING CHART (With UCL, LCL, MEAN, MAX, MIN)
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
-                        d_max, d_min = data_series.max(), data_series.min()
                         
                         fig_trend = go.Figure()
-                        
-                        # Process Line
                         fig_trend.add_trace(go.Scatter(
                             x=x_axis, y=data_series, mode='lines+markers', 
                             line=dict(color='#4F81BD', width=2), 
@@ -124,38 +132,29 @@ if uploaded_file:
                             name='Data'
                         ))
                         
-                        # --- Horizontal Mean Line ---
-                        fig_trend.add_hline(
-                            y=mean, line_color="#333333", line_width=1.5, line_dash="dash",
-                            annotation_text=f"<b>MEAN: {mean:.1f}</b>", annotation_position="right"
-                        )
+                        # Reference Lines
+                        fig_trend.add_hline(y=mean, line_color="#333", line_width=1.5, line_dash="solid", annotation_text=f"Mean: {mean:.1f}")
+                        fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}")
+                        fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}")
+                        fig_trend.add_hline(y=lsl, line_color="red", line_width=1, line_dash="dot", annotation_text="LSL")
+                        fig_trend.add_hline(y=usl, line_color="red", line_width=1, line_dash="dot", annotation_text="USL")
                         
-                        # --- MAX Annotation ---
-                        fig_trend.add_annotation(
-                            x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()),
-                            y=d_max, text=f"<b>MAX: {d_max:.1f}</b>",
-                            showarrow=True, arrowhead=1, ax=0, ay=-35, font=dict(color="#1A5276", size=11),
-                            bgcolor="white", bordercolor="#1A5276", borderwidth=1
-                        )
-                        
-                        # --- MIN Annotation ---
-                        fig_trend.add_annotation(
-                            x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()),
-                            y=d_min, text=f"<b>MIN: {d_min:.1f}</b>",
-                            showarrow=True, arrowhead=1, ax=0, ay=35, font=dict(color="#922B21", size=11),
-                            bgcolor="white", bordercolor="#922B21", borderwidth=1
-                        )
+                        # Max/Min Markers
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()),
+                                               y=d_max, text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="green"))
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()),
+                                               y=d_min, text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=1, ax=0, ay=30, font=dict(color="red"))
 
                         fig_trend.update_layout(
                             title=dict(text=f"<b>{target_col} Trending</b>", x=0.5, xanchor='center'),
-                            height=300, plot_bgcolor='#FFFFFF', margin=dict(l=20, r=100, t=30, b=20),
-                            xaxis=dict(type='category', categoryorder='array', categoryarray=x_axis.tolist(), showgrid=False, showline=True, linecolor='black'),
-                            yaxis=dict(showgrid=True, gridcolor='#F0F0F0', showline=True, linecolor='black')
+                            height=320, plot_bgcolor='#F9F9F9', margin=dict(l=20, r=100, t=30, b=20),
+                            xaxis=dict(type='category', categoryorder='array', categoryarray=x_axis.tolist(), showgrid=False, linecolor='black'),
+                            yaxis=dict(showgrid=True, gridcolor='#E0E0E0', showline=True, linecolor='black')
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
-                        st.markdown("<br><br>", unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi: {e}")
 else:
-    st.info("Vui lòng tải file dữ liệu (Excel/CSV) lên để bắt đầu phân tích.")
+    st.info("Vui lòng tải file để bắt đầu phân tích.")
