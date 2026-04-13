@@ -9,10 +9,10 @@ from scipy.stats import norm
 st.set_page_config(page_title="Mechanical Property SPC Dashboard", layout="wide", page_icon="📊")
 
 st.title("📊 Mechanical Property Comprehensive Analysis")
-st.markdown("Automated SPC calculation focusing on Process Control Limits (UCL/LCL) and Accuracy.")
+st.markdown("Hệ thống tự động tính toán SPC và kiểm soát năng lực quy trình theo chuẩn giới hạn khách hàng.")
 
 # 1. Upload Data
-uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['csv', 'xlsx'])
+uploaded_file = st.file_uploader("Tải lên file Excel hoặc CSV", type=['csv', 'xlsx'])
 
 if uploaded_file:
     try:
@@ -23,7 +23,7 @@ if uploaded_file:
         
         df.columns = df.columns.str.strip()
 
-        # --- DATA CORRECTIONS (Based on Mandy's factory rules) ---
+        # --- DATA CORRECTIONS (Based on factory rules) ---
         if '鋼種' in df.columns:
             df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
         if 'Metallic_Type' in df.columns:
@@ -54,16 +54,30 @@ if uploaded_file:
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
-        # 2. Specification Limits Setting (Optional - If left at 0, shows N/A)
+        # 2. Specification Limits Setting (Auto-mapping defaults)
         with st.expander("⚙️ Customer Specification Settings (LSL / USL)", expanded=False):
-            st.info("Input customer specs here. If left as 0, Cp/Ca/Cpk will show as 'N/A'.")
+            st.info("Các giới hạn YS, TS, EL đã được tự động điền theo tiêu chuẩn. Bạn có thể chỉnh sửa nếu cần.")
             specs = {}
             for target in available_targets:
+                # Logic tự động nhận diện mác đo để gán Spec mặc định
+                def_lsl, def_usl, def_tgt = 0.0, 0.0, 0.0
+                t_upper = target.upper()
+                
+                if 'YS' in t_upper or 'YIELD' in t_upper:
+                    def_lsl, def_usl = 230.0, 460.0
+                    def_tgt = (230.0 + 460.0) / 2
+                elif 'TS' in t_upper or 'TENSILE_TENSILE' in t_upper:
+                    def_lsl, def_usl = 310.0, 550.0
+                    def_tgt = (310.0 + 550.0) / 2
+                elif 'EL' in t_upper or 'ELONG' in t_upper:
+                    def_lsl, def_usl = 20.0, 0.0 # Min 20, Không có max
+                    def_tgt = 0.0 # Không có Target cho Spec 1 phía
+
                 st.markdown(f"**Settings for {target}**")
                 sc1, sc2, sc3 = st.columns(3)
-                with sc1: t_val = st.number_input(f"Target ({target})", value=0.0, key=f"t_{target}")
-                with sc2: l_val = st.number_input(f"LSL ({target})", value=0.0, key=f"l_{target}")
-                with sc3: u_val = st.number_input(f"USL ({target})", value=0.0, key=f"u_{target}")
+                with sc1: t_val = st.number_input(f"Target ({target})", value=float(def_tgt), key=f"t_{target}")
+                with sc2: l_val = st.number_input(f"LSL ({target})", value=float(def_lsl), key=f"l_{target}")
+                with sc3: u_val = st.number_input(f"USL ({target})", value=float(def_usl), key=f"u_{target}")
                 specs[target] = {'tgt': t_val, 'lsl': l_val, 'usl': u_val}
 
         # --- DRAW GRID VIEW ---
@@ -74,7 +88,7 @@ if uploaded_file:
                 if i + j < len(available_targets):
                     target_col = available_targets[i + j]
                     with grid_cols[j]:
-                        # Data Cleaning for current target
+                        # Data Cleaning
                         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
@@ -91,20 +105,34 @@ if uploaded_file:
                         d_max, d_min = data_series.max(), data_series.min()
                         ucl, lcl = mean + 3*std, mean - 3*std
                         
-                        # Fetch User Specs
+                        # Fetch Specs
                         lsl_in, usl_in, tgt_in = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
                         
-                        # --- SPC LOGIC ---
+                        # --- SPC LOGIC (Xử lý 1 phía và 2 phía) ---
                         if lsl_in == 0 and usl_in == 0:
+                            # Không nhập Spec
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", "N/A"
-                            status_color = "#6c757d" # Gray
+                            status_color = "#6c757d"
                             spec_active = False
+                        elif usl_in == 0 and lsl_in > 0:
+                            # Giới hạn 1 phía dưới (VD: EL Min 20)
+                            cpk = (mean - lsl_in) / (3 * std) if std > 0 else 0
+                            ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
+                            status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
+                            spec_active = True
+                        elif lsl_in == 0 and usl_in > 0:
+                            # Giới hạn 1 phía trên
+                            cpk = (usl_in - mean) / (3 * std) if std > 0 else 0
+                            ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
+                            status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
+                            spec_active = True
                         else:
+                            # Giới hạn 2 phía bình thường (VD: YS, TS)
                             ca = ((mean - tgt_in) / ((usl_in - lsl_in) / 2)) * 100 if usl_in != lsl_in else 0
                             cp = (usl_in - lsl_in) / (6 * std) if std > 0 else 0
                             cpk = min((usl_in - mean)/(3*std), (mean - lsl_in)/(3*std)) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = f"{ca:.1f}%", f"{cp:.3f}", f"{cpk:.3f}"
-                            status_color = "#28a745" if cpk >= 1.33 else "#dc3545" # Green or Red
+                            status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
 
                         # 1. DISTRIBUTION CHART
@@ -118,18 +146,26 @@ if uploaded_file:
                             y_curve = norm.pdf(x_curve, mean, std) * count * bin_w
                             fig_dist.add_trace(go.Scatter(x=x_curve, y=y_curve, mode='lines', line=dict(color='#FFB300', width=2), showlegend=False))
 
-                        # Specification Annotations (Red Lines)
+                        # Specification Annotations
                         if spec_active:
-                            fig_dist.add_vline(x=lsl_in, line_color="red", line_width=2)
-                            fig_dist.add_annotation(x=lsl_in, y=0.95, yref='paper', text=f"LSL: {lsl_in:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="right", xshift=-5)
-                            fig_dist.add_vline(x=usl_in, line_color="red", line_width=2)
-                            fig_dist.add_annotation(x=usl_in, y=0.95, yref='paper', text=f"USL: {usl_in:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="left", xshift=5)
+                            if lsl_in > 0:
+                                fig_dist.add_vline(x=lsl_in, line_color="red", line_width=2)
+                                fig_dist.add_annotation(x=lsl_in, y=0.95, yref='paper', text=f"LSL: {lsl_in:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="right", xshift=-5)
+                            if usl_in > 0:
+                                fig_dist.add_vline(x=usl_in, line_color="red", line_width=2)
+                                fig_dist.add_annotation(x=usl_in, y=0.95, yref='paper', text=f"USL: {usl_in:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="left", xshift=5)
                         
                         # Mean & Min/Max
                         fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
                         fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
                         fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
+
+                        # Thêm UCL/LCL vào Histogram
+                        fig_dist.add_vline(x=ucl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
+                        fig_dist.add_annotation(x=ucl, y=0.85, yref='paper', text=f"UCL: {ucl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
+                        fig_dist.add_vline(x=lcl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
+                        fig_dist.add_annotation(x=lcl, y=0.85, yref='paper', text=f"LCL: {lcl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
 
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} Distribution</b>", x=0.5, xanchor='center'),
@@ -139,12 +175,7 @@ if uploaded_file:
                             yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
-                        # Thêm đường UCL/LCL vào biểu đồ Distribution
-                        fig_dist.add_vline(x=ucl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
-                        fig_dist.add_annotation(x=ucl, y=0.85, yref='paper', text=f"UCL: {ucl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
-                        
-                        fig_dist.add_vline(x=lcl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
-                        fig_dist.add_annotation(x=lcl, y=0.85, yref='paper', text=f"LCL: {lcl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
+
                         # 2. METRICS CARD
                         st.markdown(f"""
                         <div style="padding:12px; border-radius:8px; border-left: 6px solid {status_color}; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
@@ -153,7 +184,7 @@ if uploaded_file:
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # 3. TRENDING CHART (UCL & LCL)
+                        # 3. TRENDING CHART
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
@@ -179,4 +210,4 @@ if uploaded_file:
     except Exception as e:
         st.error(f"Critical Error: {e}")
 else:
-    st.info("Please upload a file to begin.")
+    st.info("Vui lòng tải file dữ liệu lên để bắt đầu.")
