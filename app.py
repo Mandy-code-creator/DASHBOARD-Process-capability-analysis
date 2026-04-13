@@ -21,15 +21,13 @@ if uploaded_file:
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Clean column names (remove hidden spaces)
+        # Clean column names
         df.columns = df.columns.str.strip()
 
         # --- INVISIBLE DATA CORRECTIONS ---
-        # Group GE00 and GE01 together based on management rules
         if '鋼種' in df.columns:
             df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
         
-        # Remove GF from analysis to prevent data errors
         if 'Metallic_Type' in df.columns:
             df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
 
@@ -80,7 +78,6 @@ if uploaded_file:
         st.markdown("---")
         st.markdown("### 🏆 Comprehensive Process Capability Overview")
         
-        # Identify Target Columns automatically
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in df.columns]
         
@@ -91,8 +88,7 @@ if uploaded_file:
             st.error("No numeric target columns found for analysis.")
             st.stop()
 
-        # Create settings expander for Specs (so users can tweak LSL/USL for each chart)
-        with st.expander("⚙️ Specification Limits Settings (LSL / USL / Target)", expanded=False):
+        with st.expander("⚙️ Specification Limits Settings (LSL / USL)", expanded=False):
             st.markdown("Adjust the specifications for each parameter. By default, limits are estimated using $\pm 3\sigma$.")
             specs = {}
             for target in available_targets:
@@ -121,12 +117,10 @@ if uploaded_file:
                     col = grid_cols[j]
                     
                     with col:
-                        # Clean data for specific target
                         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
                         
-                        # Remove duplicate coils to prevent vertical line glitches
                         if coil_col:
                             analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
 
@@ -149,42 +143,45 @@ if uploaded_file:
                         cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
 
                         # ==========================================
-                        # 1. DISTRIBUTION CHART (Professional Style)
+                        # 1. DISTRIBUTION CHART (Reference Style)
                         # ==========================================
                         fig_dist = go.Figure()
                         
-                        # Histogram with clean borders
+                        # Histogram (Light blue, no borders)
                         fig_dist.add_trace(go.Histogram(
                             x=data_series, 
                             histnorm='probability density', 
                             name='Actual Data', 
-                            marker=dict(color='#5A9BD4', line=dict(color='white', width=1)), 
+                            marker=dict(color='#8FB8DE'), # Light blue
                             opacity=0.85
                         ))
                         
-                        # Smooth Normal Curve
+                        # Normal Curve (Solid darker blue)
                         if std > 0:
                             x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
                             fig_dist.add_trace(go.Scatter(
                                 x=x_curve, y=norm.pdf(x_curve, mean, std), 
                                 mode='lines', name='Normal Curve', 
-                                line=dict(color='#FF9D00', width=3)
+                                line=dict(color='#1F77B4', width=2.5)
                             ))
                         
-                        # Spec Lines
-                        fig_dist.add_vline(x=lsl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text=f"LSL: {lsl:.1f}", annotation_position="top left")
-                        fig_dist.add_vline(x=usl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text=f"USL: {usl:.1f}", annotation_position="top right")
-                        fig_dist.add_vline(x=target_val, line_dash="dot", line_color="#4CAF50", line_width=2, annotation_text="TGT", annotation_position="top right")
-                        fig_dist.add_vline(x=mean, line_dash="solid", line_color="#333333", line_width=1.5, annotation_text=f"Mean: {mean:.1f}", annotation_position="top left")
+                        # Spec Lines (Blue Dotted) - NO TARGET LINE
+                        fig_dist.add_vline(x=lsl, line_dash="dot", line_color="blue", line_width=2)
+                        fig_dist.add_vline(x=usl, line_dash="dot", line_color="blue", line_width=2)
                         
                         fig_dist.update_layout(
-                            title=dict(text=f"<b>Distribution: {target_col}</b>", font=dict(size=16)),
-                            height=320, 
-                            margin=dict(l=20, r=20, t=50, b=20), 
+                            title=dict(
+                                text=f"<b>{target_col}</b><br><sup>(Mean={mean:.1f}, Std={std:.1f})</sup>", 
+                                font=dict(size=16, color='black'),
+                                x=0.5, xanchor='center'
+                            ),
+                            height=350, 
+                            margin=dict(l=20, r=20, t=60, b=20), 
                             showlegend=False, 
-                            bargap=0.05,
-                            template='plotly_white',
-                            yaxis=dict(showticklabels=False, showgrid=False)
+                            bargap=0.0,
+                            plot_bgcolor='white',
+                            xaxis=dict(showgrid=True, gridcolor='#E5E5E5', griddash='dash', zeroline=False),
+                            yaxis=dict(showgrid=True, gridcolor='#E5E5E5', griddash='dash', zeroline=False)
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
@@ -206,33 +203,32 @@ if uploaded_file:
                                 <span style="font-family: monospace; font-size: 13px; color: #444;"><b>n:</b> {count}</span>
                             </div>
                             <div style="display: flex; justify-content: space-between; font-family: monospace; font-size: 14px; margin-left: 5px; padding-top: 4px;">
-                                <span><b style="color:#555;">Mean:</b> {mean:.2f}</span>
-                                <span><b style="color:#555;">Std:</b> {std:.3f}</span>
                                 <span style="color: #d9534f; font-weight: bold;">Cpk = {cpk:.3f}</span>
                                 <span style="font-weight: bold; color: #333;">Cp = {cp:.3f}</span>
+                                <span style="font-weight: bold; color: #333;">Ca = {ca:.1f}%</span>
                             </div>
                         </div>
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
 
                         # ==========================================
-                        # 3. TREND CHART (Professional Style)
+                        # 3. TREND CHART (Reference Style)
                         # ==========================================
                         x_data = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         
                         fig_trend = go.Figure()
                         
-                        # Trend line with clear markers
+                        # Trend line (Yellow/Orange with open circles)
                         fig_trend.add_trace(go.Scatter(
                             x=x_data,
                             y=analysis_df[target_col],
                             mode='lines+markers',
                             name='Process Data',
-                            line=dict(color='#5A9BD4', width=2),
-                            marker=dict(size=7, color='#5A9BD4', line=dict(color='white', width=1))
+                            line=dict(color='#FFB300', width=2),
+                            marker=dict(size=8, color='white', line=dict(color='#FFB300', width=2))
                         ))
 
-                        # Highlight OOC points with prominent red circles
+                        # Highlight OOC points (Solid Red)
                         ooc_df = analysis_df[(analysis_df[target_col] < lsl) | (analysis_df[target_col] > usl)]
                         if not ooc_df.empty:
                             ooc_x = ooc_df[coil_col].astype(str) if coil_col else ooc_df.index.astype(str)
@@ -240,31 +236,30 @@ if uploaded_file:
                                 x=ooc_x,
                                 y=ooc_df[target_col],
                                 mode='markers',
-                                marker=dict(color='#E03A3C', size=10, symbol='circle', line=dict(color='white', width=1)),
+                                marker=dict(color='red', size=10, symbol='circle'),
                                 name='OOC'
                             ))
 
-                        # Horizontal reference lines
-                        fig_trend.add_hline(y=mean, line_color="#333333", line_width=1.5, line_dash="solid", annotation_text="Mean", annotation_font_size=10)
-                        fig_trend.add_hline(y=lsl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text="LSL", annotation_font_size=10)
-                        fig_trend.add_hline(y=usl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text="USL", annotation_font_size=10)
+                        # Reference lines (Red dashed for spec, solid purple/dark for mean)
+                        fig_trend.add_hline(y=mean, line_color="#5E35B1", line_width=1.5, line_dash="solid")
+                        fig_trend.add_hline(y=lsl, line_dash="dash", line_color="red", line_width=2)
+                        fig_trend.add_hline(y=usl, line_dash="dash", line_color="red", line_width=2)
                         
                         fig_trend.update_layout(
-                            title=dict(text=f"<b>Trend: {target_col}</b>", font=dict(size=14)),
-                            height=280, 
-                            margin=dict(l=20, r=20, t=40, b=20),
+                            height=250, 
+                            margin=dict(l=20, r=20, t=10, b=20),
                             xaxis_title="",
                             showlegend=False,
-                            template='plotly_white',
+                            plot_bgcolor='#F4F4F4', # Light gray background
                             xaxis=dict(
                                 type='category',
                                 categoryorder='array',
                                 categoryarray=x_data.tolist(),
-                                showgrid=False,
+                                showgrid=True, gridcolor='#E5E5E5',
                                 zeroline=False,
                                 tickangle=45
                             ),
-                            yaxis=dict(showgrid=True, gridcolor='#eeeeee', zeroline=False)
+                            yaxis=dict(showgrid=True, gridcolor='#E5E5E5', zeroline=False)
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
                         st.markdown("<br><br>", unsafe_allow_html=True)
