@@ -21,13 +21,15 @@ if uploaded_file:
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Clean column names
+        # Clean column names (remove hidden spaces)
         df.columns = df.columns.str.strip()
 
         # --- INVISIBLE DATA CORRECTIONS ---
+        # Group GE00 and GE01 together based on management rules
         if '鋼種' in df.columns:
             df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
         
+        # Remove GF from analysis to prevent data errors
         if 'Metallic_Type' in df.columns:
             df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
 
@@ -78,6 +80,7 @@ if uploaded_file:
         st.markdown("---")
         st.markdown("### 🏆 Comprehensive Process Capability Overview")
         
+        # Identify Target Columns automatically
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in df.columns]
         
@@ -88,7 +91,7 @@ if uploaded_file:
             st.error("No numeric target columns found for analysis.")
             st.stop()
 
-        with st.expander("⚙️ Specification Limits Settings (LSL / USL)", expanded=False):
+        with st.expander("⚙️ Specification Limits Settings (LSL / USL / Target)", expanded=False):
             st.markdown("Adjust the specifications for each parameter. By default, limits are estimated using $\pm 3\sigma$.")
             specs = {}
             for target in available_targets:
@@ -117,10 +120,12 @@ if uploaded_file:
                     col = grid_cols[j]
                     
                     with col:
+                        # Clean data for specific target
                         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
                         
+                        # Remove duplicate coils to prevent vertical line glitches
                         if coil_col:
                             analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
 
@@ -142,138 +147,128 @@ if uploaded_file:
                         cp = (usl - lsl) / (6 * std) if std > 0 else 0
                         cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
 
-                        # ==========================================
-                        # ==========================================
-                        # ==========================================
-                        # ==========================================
-                        # 1. DISTRIBUTION CHART (Stacked, Boxed, Dark Blue + Normal Curve)
-                        # ==========================================
-                        has_grade = '鋼種' in analysis_df.columns and analysis_df['鋼種'].nunique() > 0
-                        
-                        # Use dark blue color palette
-                        dark_blue_palette = ['#1F497D', '#4F81BD', '#8DB4E2', '#B8CCE4', '#003366']
+                        st.subheader(f"Analysis: {target_col}")
 
-                        # Draw Stacked Histogram (Counts)
-                        if has_grade:
-                            fig_dist = px.histogram(
-                                analysis_df, 
-                                x=target_col, 
-                                color='鋼種',
-                                nbins=20, 
-                                barmode='stack',
-                                color_discrete_sequence=dark_blue_palette
-                            )
-                        else:
-                            fig_dist = px.histogram(
-                                analysis_df, 
-                                x=target_col, 
-                                nbins=20, 
-                                color_discrete_sequence=['#1F497D']
-                            )
-                            
-                        # Apply white borders to make grid cells distinct
-                        fig_dist.update_traces(marker_line_color='white', marker_line_width=1.5, opacity=0.85)
+                        # ── 1. DISTRIBUTION CHART ──────────────────────────────────────────
+                        fig_dist = go.Figure()
 
-                        # --- ADD NORMAL CURVE (Scaled to match Count Histogram) ---
+                        # ±1σ / ±2σ / ±3σ background shading
                         if std > 0:
-                            x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
-                            # Approximate bin width to scale PDF to Counts
-                            bin_width = (data_series.max() - data_series.min()) / 20 if data_series.max() > data_series.min() else 1
-                            y_curve = norm.pdf(x_curve, mean, std) * count * bin_width
-                            
+                            for x0, x1, fill in [
+                                (mean - 3*std, mean - 2*std, 'rgba(239,68,68,0.07)'),
+                                (mean + 2*std, mean + 3*std, 'rgba(239,68,68,0.07)'),
+                                (mean - 2*std, mean - 1*std, 'rgba(245,158,11,0.07)'),
+                                (mean + 1*std, mean + 2*std, 'rgba(245,158,11,0.07)'),
+                                (mean - 1*std, mean + 1*std, 'rgba(34,197,94,0.07)'),
+                            ]:
+                                fig_dist.add_vrect(x0=x0, x1=x1, fillcolor=fill, layer='below', line_width=0)
+
+                        # Histogram bars
+                        fig_dist.add_trace(go.Histogram(
+                            x=data_series,
+                            histnorm='probability density',
+                            name='Data',
+                            marker=dict(
+                                color='rgba(59,130,246,0.5)',
+                                line=dict(color='rgba(37,99,235,0.8)', width=0.7),
+                            ),
+                            nbinsx=min(40, max(10, count // 5)),
+                        ))
+
+                        # Normal curve
+                        if std > 0:
+                            x_curve = np.linspace(data_series.min() - 2*std, data_series.max() + 2*std, 500)
                             fig_dist.add_trace(go.Scatter(
-                                x=x_curve, y=y_curve, 
-                                mode='lines', name='Normal Curve', 
-                                line=dict(color='#FFB300', width=2.5), # Orange curve
-                                showlegend=False
+                                x=x_curve,
+                                y=norm.pdf(x_curve, mean, std),
+                                mode='lines',
+                                name='Normal Curve',
+                                line=dict(color='#1e293b', width=2.5),
                             ))
 
-                        # LSL & USL (Solid Red Lines with Top Annotations)
-                        fig_dist.add_vline(x=lsl, line_width=2, line_dash="solid", line_color="red")
-                        fig_dist.add_annotation(
-                            x=lsl, y=0.98, yref='paper', text=f"<b>LSL<br>{lsl:.0f}</b>", 
-                            showarrow=False, font=dict(color="red", size=11), xanchor="right", xshift=-5
-                        )
-                        
-                        fig_dist.add_vline(x=usl, line_width=2, line_dash="solid", line_color="red")
-                        fig_dist.add_annotation(
-                            x=usl, y=0.98, yref='paper', text=f"<b>USL<br>{usl:.0f}</b>", 
-                            showarrow=False, font=dict(color="red", size=11), xanchor="left", xshift=5
-                        )
-
-                        # Target Line (Dotted Blue with annotation)
-                        fig_dist.add_vline(x=target_val, line_width=1.5, line_dash="dot", line_color="#0275d8")
-                        fig_dist.add_annotation(
-                            x=target_val, y=0.85, yref='paper', text=f"<b>TGT<br>{target_val:.0f}</b>", 
-                            showarrow=False, font=dict(color="#0275d8", size=10), xanchor="right", xshift=-5
-                        )
-
-                        # Add Group Means with Colored Boxes
-                        if has_grade:
-                            for i, trace in enumerate(fig_dist.data):
-                                if trace.name == 'Normal Curve': continue # Skip normal curve trace
-                                
-                                grade_name = trace.name
-                                grade_color = trace.marker.color
-                                grade_mean = analysis_df[analysis_df['鋼種'] == grade_name][target_col].mean()
-                                
-                                if pd.notna(grade_mean):
-                                    fig_dist.add_vline(x=grade_mean, line_width=1.5, line_dash="dash", line_color=grade_color)
-                                    # Stagger Y position to avoid box overlap
-                                    y_pos = 0.80 - (i % 5) * 0.12 
-                                    fig_dist.add_annotation(
-                                        x=grade_mean, y=y_pos, yref='paper',
-                                        text=f"<b>{grade_mean:.1f}</b>",
-                                        showarrow=False,
-                                        font=dict(color="white", size=10),
-                                        bgcolor=grade_color, bordercolor="black", borderwidth=1, borderpad=3,
-                                        xanchor="center"
-                                    )
-                        else:
-                            # Overall Mean if no grade column exists
-                            fig_dist.add_vline(x=mean, line_width=1.5, line_dash="dash", line_color="#333333")
-                            fig_dist.add_annotation(
-                                x=mean, y=0.80, yref='paper', text=f"<b>{mean:.1f}</b>", 
-                                showarrow=False, font=dict(color="white", size=10),
-                                bgcolor="#333333", bordercolor="black", borderwidth=1, borderpad=3, xanchor="center"
+                        # LSL / USL lines with annotation boxes
+                        for val, label, color in [(lsl, 'LSL', '#ef4444'), (usl, 'USL', '#ef4444')]:
+                            fig_dist.add_vline(
+                                x=val,
+                                line=dict(color=color, width=1.8, dash='dash'),
+                                annotation=dict(
+                                    text=f"<b>{label}</b><br>{val:.1f}",
+                                    font=dict(color=color, size=10, family='Arial'),
+                                    bgcolor='rgba(255,255,255,0.9)',
+                                    bordercolor=color,
+                                    borderwidth=1,
+                                    borderpad=4,
+                                ),
                             )
 
-                        # Layout to match the clean framed look
-                        fig_dist.update_layout(
-                            title=dict(text=f"<b>{target_col} (Overall)</b>", font=dict(size=14, color='black'), x=0.5, xanchor='center'),
-                            height=380, 
-                            margin=dict(l=20, r=20, t=60, b=20), # Increased top margin for legend
-                            showlegend=True,
-                            # FIX LEGEND OVERLAP: Move legend horizontally above the chart
-                            legend=dict(
-                                title="", font=dict(size=10), 
-                                orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5
+                        # Target line
+                        fig_dist.add_vline(
+                            x=target_val,
+                            line=dict(color='#22c55e', width=1.8, dash='dot'),
+                            annotation=dict(
+                                text=f"<b>TGT</b><br>{target_val:.1f}",
+                                font=dict(color='#22c55e', size=10, family='Arial'),
+                                bgcolor='rgba(255,255,255,0.9)',
+                                bordercolor='#22c55e',
+                                borderwidth=1,
+                                borderpad=4,
                             ),
+                        )
+
+                        # Mean line
+                        fig_dist.add_vline(
+                            x=mean,
+                            line=dict(color='#3b82f6', width=1.5, dash='dot'),
+                            annotation=dict(
+                                text=f"<b>X̄</b><br>{mean:.2f}",
+                                font=dict(color='#3b82f6', size=10, family='Arial'),
+                                bgcolor='rgba(255,255,255,0.9)',
+                                bordercolor='#3b82f6',
+                                borderwidth=1,
+                                borderpad=4,
+                            ),
+                        )
+
+                        fig_dist.update_layout(
+                            height=350,
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            showlegend=False,
+                            bargap=0.04,
+                            paper_bgcolor='white',
                             plot_bgcolor='white',
-                            xaxis_title="",
-                            yaxis_title="",
-                            xaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True),
-                            yaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True)
+                            font=dict(family='Arial, sans-serif', size=11, color='#334155'),
+                            xaxis=dict(
+                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
+                                linecolor='#e2e8f0', tickfont=dict(size=10),
+                                title=dict(text=target_col, font=dict(size=11, color='#64748b')),
+                            ),
+                            yaxis=dict(
+                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
+                                linecolor='#e2e8f0', tickfont=dict(size=10),
+                                title=dict(text='Density', font=dict(size=11, color='#64748b')),
+                            ),
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
-                        # ==========================================
-                        # 2. HTML METRICS CARD
-                        # ==========================================
+
+                        # ── 2. HTML METRICS CARD (original, unchanged) ─────────
                         is_capable = cpk >= 1.33
                         icon = "✅" if is_capable else "❌"
                         status_text = "Capable" if is_capable else "Not Capable"
                         border_color = "#28a745" if is_capable else "#dc3545"
                         
                         card_html = f"""
-                        <div style="border: 1px solid #e0e0e0; border-left: 6px solid {border_color}; border-radius: 8px; background-color: #ffffff; padding: 12px; margin-bottom: 10px; box-shadow: 0px 2px 4px rgba(0,0,0,0.05);">
-                            <div style="display: flex; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
-                                <span style="font-size: 15px; font-weight: bold; color: {border_color}; min-width: 120px;">{icon} {status_text}</span>
-                                <span style="color: #ccc;">|</span>
-                                <span style="font-family: monospace; font-size: 13px; color: #444;"><b>LSL:</b> {lsl:.1f} &nbsp;&nbsp; <b>USL:</b> {usl:.1f}</span>
-                                <span style="color: #ccc;">|</span>
-                                <span style="font-family: monospace; font-size: 13px; color: #444;"><b>n:</b> {count}</span>
+                        <div style="border: 1px solid #e0e0e0; border-left: 6px solid {border_color}; border-radius: 8px; background-color: #fafafa; padding: 15px; margin-bottom: 10px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
+                            <div style="display: flex; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;">
+                                <span style="font-size: 16px; font-weight: 700; color: {border_color}; min-width: 130px;">{icon} {status_text}</span>
+                                <span style="color: #aaa;">|</span>
+                                <span style="font-family: monospace; font-size: 13px; color: #333;"><b>LSL:</b> {lsl:.0f} &nbsp;&nbsp; <b>USL:</b> {usl:.0f}</span>
+                                <span style="color: #aaa;">|</span>
+                                <span style="font-family: monospace; font-size: 13px; color: #333;"><b>n:</b> {count} &nbsp;&nbsp; <b>Mean:</b></span>
                             </div>
-                            <div style="display: flex; justify-content: space-between; font-family: monospace; font-size: 14px; margin-left: 5px; padding-top: 4px;">
+                            <div style="font-family: monospace; font-size: 13px; color: #333; margin-bottom: 12px; margin-left: 5px;">
+                                {mean:.2f} &nbsp;&nbsp; <b>Std:</b> {std:.3f}
+                            </div>
+                            <div style="display: flex; gap: 20px; font-family: monospace; font-size: 14px; margin-left: 5px;">
                                 <span style="color: #d9534f; font-weight: bold;">Cpk = {cpk:.3f}</span>
                                 <span style="font-weight: bold; color: #333;">Cp = {cp:.3f}</span>
                                 <span style="font-weight: bold; color: #333;">Ca = {ca:.1f}%</span>
@@ -282,58 +277,120 @@ if uploaded_file:
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
 
-                        # ==========================================
-                        # 3. TREND CHART (Reference Style)
-                        # ==========================================
+                        # ── 3. TREND CHART ─────────────────────────────────────
                         x_data = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
-                        
+                        y_data = analysis_df[target_col].values
+
+                        # Regression trend line
+                        xi = np.arange(len(y_data))
+                        z = np.polyfit(xi, y_data, 1)
+                        trend_line = np.poly1d(z)(xi)
+
+                        # OOC mask
+                        oos_mask = (y_data < lsl) | (y_data > usl)
+
                         fig_trend = go.Figure()
-                        
-                        # Trend line (Yellow/Orange with open circles)
+
+                        # ±3σ / ±1σ background bands
+                        if std > 0:
+                            fig_trend.add_hrect(
+                                y0=mean - 3*std, y1=mean + 3*std,
+                                fillcolor='rgba(59,130,246,0.04)',
+                                layer='below', line_width=0,
+                            )
+                            fig_trend.add_hrect(
+                                y0=mean - std, y1=mean + std,
+                                fillcolor='rgba(34,197,94,0.06)',
+                                layer='below', line_width=0,
+                            )
+
+                        # Main process line — in-spec points blue, OOC red
                         fig_trend.add_trace(go.Scatter(
                             x=x_data,
-                            y=analysis_df[target_col],
+                            y=y_data,
                             mode='lines+markers',
                             name='Process Data',
-                            line=dict(color='#FFB300', width=2),
-                            marker=dict(size=8, color='white', line=dict(color='#FFB300', width=2))
+                            line=dict(color='#94a3b8', width=1.3),
+                            marker=dict(
+                                size=5,
+                                color=['#ef4444' if m else '#3b82f6' for m in oos_mask],
+                                line=dict(width=0),
+                            ),
                         ))
 
-                        # Highlight OOC points (Solid Red)
-                        ooc_df = analysis_df[(analysis_df[target_col] < lsl) | (analysis_df[target_col] > usl)]
-                        if not ooc_df.empty:
-                            ooc_x = ooc_df[coil_col].astype(str) if coil_col else ooc_df.index.astype(str)
+                        # OOC cross markers
+                        if oos_mask.any():
                             fig_trend.add_trace(go.Scatter(
-                                x=ooc_x,
-                                y=ooc_df[target_col],
+                                x=x_data[oos_mask],
+                                y=y_data[oos_mask],
                                 mode='markers',
-                                marker=dict(color='red', size=10, symbol='circle'),
-                                name='OOC'
+                                marker=dict(
+                                    color='#ef4444', size=9,
+                                    symbol='x-thin',
+                                    line=dict(width=2.5, color='#ef4444'),
+                                ),
+                                name='OOC',
                             ))
 
-                        # Reference lines (Red dashed for spec, solid purple/dark for mean)
-                        fig_trend.add_hline(y=mean, line_color="#5E35B1", line_width=1.5, line_dash="solid")
-                        fig_trend.add_hline(y=lsl, line_dash="dash", line_color="red", line_width=2)
-                        fig_trend.add_hline(y=usl, line_dash="dash", line_color="red", line_width=2)
-                        
+                        # Regression trend line
+                        fig_trend.add_trace(go.Scatter(
+                            x=x_data,
+                            y=trend_line,
+                            mode='lines',
+                            name='Trend',
+                            line=dict(color='#8b5cf6', width=2, dash='dash'),
+                        ))
+
+                        # Reference lines: Mean, LSL, USL, ±3σ
+                        ref_lines = [
+                            (mean,          f'X̄={mean:.2f}',       '#3b82f6', 'dot'),
+                            (lsl,           f'LSL={lsl:.1f}',       '#ef4444', 'dash'),
+                            (usl,           f'USL={usl:.1f}',       '#ef4444', 'dash'),
+                        ]
+                        if std > 0:
+                            ref_lines += [
+                                (mean + 3*std, f'+3σ={mean+3*std:.1f}', '#f59e0b', 'longdash'),
+                                (mean - 3*std, f'−3σ={mean-3*std:.1f}', '#f59e0b', 'longdash'),
+                            ]
+
+                        for y_val, label, color, dash in ref_lines:
+                            fig_trend.add_hline(
+                                y=y_val,
+                                line=dict(color=color, width=1.2, dash=dash),
+                                annotation=dict(
+                                    text=f"<b>{label}</b>",
+                                    font=dict(color=color, size=9, family='Arial'),
+                                    bgcolor='rgba(255,255,255,0.85)',
+                                    xanchor='right',
+                                ),
+                                annotation_position='right',
+                            )
+
                         fig_trend.update_layout(
-                            height=250, 
-                            margin=dict(l=20, r=20, t=10, b=20),
-                            xaxis_title="",
+                            height=250,
+                            margin=dict(l=20, r=90, t=10, b=20),
                             showlegend=False,
-                            plot_bgcolor='#F4F4F4', # Light gray background
+                            paper_bgcolor='white',
+                            plot_bgcolor='white',
+                            font=dict(family='Arial, sans-serif', size=11, color='#334155'),
                             xaxis=dict(
                                 type='category',
                                 categoryorder='array',
                                 categoryarray=x_data.tolist(),
-                                showgrid=True, gridcolor='#E5E5E5',
-                                zeroline=False,
-                                tickangle=45
+                                showgrid=False,
+                                linecolor='#e2e8f0',
+                                tickfont=dict(size=8, color='#94a3b8'),
+                                title=dict(text='Coil Sequence', font=dict(size=10, color='#94a3b8')),
+                                nticks=12,
                             ),
-                            yaxis=dict(showgrid=True, gridcolor='#E5E5E5', zeroline=False)
+                            yaxis=dict(
+                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
+                                linecolor='#e2e8f0', tickfont=dict(size=10),
+                                title=dict(text=target_col, font=dict(size=10, color='#64748b')),
+                            ),
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
-                        st.markdown("<br><br>", unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
