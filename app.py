@@ -144,84 +144,94 @@ if uploaded_file:
 
                         # ==========================================
                         # ==========================================
-                        # 1. DISTRIBUTION CHART (Reference Style)
                         # ==========================================
-                        d_min = data_series.min()
-                        d_max = data_series.max()
+                        # 1. DISTRIBUTION CHART (Stacked & Boxed Style)
+                        # ==========================================
+                        has_grade = '鋼種' in analysis_df.columns and analysis_df['鋼種'].nunique() > 0
                         
-                        fig_dist = go.Figure()
-                        
-                        # Histogram (Soft blue, no gaps between bars)
-                        fig_dist.add_trace(go.Histogram(
-                            x=data_series, 
-                            histnorm='probability density', 
-                            name='Actual Data', 
-                            marker=dict(color='#8EBCD6', line=dict(width=0)), 
-                            opacity=0.9
-                        ))
-                        
-                        # Normal Curve (Solid darker blue)
-                        if std > 0:
-                            x_curve = np.linspace(d_min - 1*std, d_max + 1*std, 500)
-                            fig_dist.add_trace(go.Scatter(
-                                x=x_curve, y=norm.pdf(x_curve, mean, std), 
-                                mode='lines', name='Normal Curve', 
-                                line=dict(color='#1F77B4', width=2.5)
-                            ))
-                        
-                        # Spec Lines (Blue Dotted)
-                        fig_dist.add_vline(x=lsl, line_dash="dot", line_color="blue", line_width=1.5)
-                        fig_dist.add_vline(x=usl, line_dash="dot", line_color="blue", line_width=1.5)
-                        
-                        # --- ANNOTATIONS: MIN, MAX, MEAN ---
-                        # Mean Line & Text
-                        fig_dist.add_vline(x=mean, line_dash="solid", line_color="#333333", line_width=1)
-                        fig_dist.add_annotation(
-                            x=mean, y=0.95, yref='paper',
-                            text=f"Mean: {mean:.1f}",
-                            showarrow=False, xanchor="left", xshift=5, font=dict(size=11, color="#333333")
-                        )
-                        
-                        # Min Annotation
-                        fig_dist.add_annotation(
-                            x=d_min, y=0.05, yref='paper',
-                            text=f"Min: {d_min:.1f}",
-                            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, ax=0, ay=-30, 
-                            font=dict(size=11, color="#d9534f"), arrowcolor="#d9534f"
-                        )
-                        
-                        # Max Annotation
-                        fig_dist.add_annotation(
-                            x=d_max, y=0.05, yref='paper',
-                            text=f"Max: {d_max:.1f}",
-                            showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5, ax=0, ay=-30, 
-                            font=dict(size=11, color="#d9534f"), arrowcolor="#d9534f"
-                        )
-                        
-                        fig_dist.update_layout(
-                            title=dict(
-                                text=f"<b>{target_col}</b><br><sup>(Mean={mean:.1f}, Std={std:.1f})</sup>", 
-                                font=dict(size=15, color='black', family="Arial"),
-                                x=0.5, xanchor='center'
-                            ),
-                            height=360, 
-                            margin=dict(l=40, r=40, t=60, b=30), 
-                            showlegend=False, 
-                            bargap=0.0, # Remove gaps to match matplotlib style
-                            plot_bgcolor='white',
-                            # Configure X Axis (Boxed frame with dashed grid)
-                            xaxis=dict(
-                                showgrid=True, gridcolor='#EAEAEA', griddash='dash', 
-                                zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True
-                            ),
-                            # Configure Y Axis (Boxed frame with dashed grid)
-                            yaxis=dict(
-                                showgrid=True, gridcolor='#EAEAEA', griddash='dash', 
-                                zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True
+                        # Draw Stacked Histogram
+                        if has_grade:
+                            fig_dist = px.histogram(
+                                analysis_df, 
+                                x=target_col, 
+                                color='鋼種',
+                                nbins=20, 
+                                barmode='stack',
+                                color_discrete_sequence=px.colors.qualitative.Set1 # Distinct professional colors
                             )
+                        else:
+                            fig_dist = px.histogram(
+                                analysis_df, 
+                                x=target_col, 
+                                nbins=20, 
+                                color_discrete_sequence=['#5A9BD4']
+                            )
+                            
+                        # Apply white borders to make grid cells distinct ("các ô kẻ rõ ràng")
+                        fig_dist.update_traces(marker_line_color='white', marker_line_width=1.5, opacity=0.85)
+
+                        # LSL & USL (Solid Red Lines with Top Annotations)
+                        fig_dist.add_vline(x=lsl, line_width=2, line_dash="solid", line_color="red")
+                        fig_dist.add_annotation(
+                            x=lsl, y=0.98, yref='paper', text=f"<b>LSL<br>{lsl:.0f}</b>", 
+                            showarrow=False, font=dict(color="red", size=11), xanchor="right", xshift=-5
+                        )
+                        
+                        fig_dist.add_vline(x=usl, line_width=2, line_dash="solid", line_color="red")
+                        fig_dist.add_annotation(
+                            x=usl, y=0.98, yref='paper', text=f"<b>USL<br>{usl:.0f}</b>", 
+                            showarrow=False, font=dict(color="red", size=11), xanchor="left", xshift=5
+                        )
+
+                        # Target Line (Dotted Blue with annotation)
+                        fig_dist.add_vline(x=target_val, line_width=1.5, line_dash="dot", line_color="#0275d8")
+                        fig_dist.add_annotation(
+                            x=target_val, y=0.85, yref='paper', text=f"<b>TGT<br>{target_val:.0f}</b>", 
+                            showarrow=False, font=dict(color="#0275d8", size=10), xanchor="right", xshift=-5
+                        )
+
+                        # Add Group Means with Colored Boxes (Matching the reference image)
+                        if has_grade:
+                            for i, trace in enumerate(fig_dist.data):
+                                grade_name = trace.name
+                                grade_color = trace.marker.color
+                                grade_mean = analysis_df[analysis_df['鋼種'] == grade_name][target_col].mean()
+                                
+                                if pd.notna(grade_mean):
+                                    fig_dist.add_vline(x=grade_mean, line_width=1.5, line_dash="dash", line_color=grade_color)
+                                    # Stagger Y position to avoid box overlap
+                                    y_pos = 0.80 - (i % 5) * 0.12 
+                                    fig_dist.add_annotation(
+                                        x=grade_mean, y=y_pos, yref='paper',
+                                        text=f"<b>{grade_mean:.1f}</b>",
+                                        showarrow=False,
+                                        font=dict(color="white", size=10),
+                                        bgcolor=grade_color, bordercolor="black", borderwidth=1, borderpad=3,
+                                        xanchor="center"
+                                    )
+                        else:
+                            # Overall Mean if no grade column exists
+                            fig_dist.add_vline(x=mean, line_width=1.5, line_dash="dash", line_color="#333333")
+                            fig_dist.add_annotation(
+                                x=mean, y=0.80, yref='paper', text=f"<b>{mean:.1f}</b>", 
+                                showarrow=False, font=dict(color="white", size=10),
+                                bgcolor="#333333", bordercolor="black", borderwidth=1, borderpad=3, xanchor="center"
+                            )
+
+                        # Layout to match the clean framed look
+                        fig_dist.update_layout(
+                            title=dict(text=f"<b>{target_col} (Overall)</b>", font=dict(size=14, color='black'), x=0.5, xanchor='center'),
+                            height=380, 
+                            margin=dict(l=20, r=20, t=50, b=20), 
+                            showlegend=True,
+                            legend=dict(title="", font=dict(size=10), bordercolor="black", borderwidth=1, yanchor="top", y=0.99, xanchor="right", x=0.99, bgcolor="rgba(255,255,255,0.8)"),
+                            plot_bgcolor='white',
+                            xaxis_title="",
+                            yaxis_title="",
+                            xaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True),
+                            yaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True)
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
-
                         # ==========================================
                         # 2. HTML METRICS CARD
                         # ==========================================
