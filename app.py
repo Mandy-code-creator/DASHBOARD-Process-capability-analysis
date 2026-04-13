@@ -55,7 +55,7 @@ if uploaded_file:
 
         # Specifications settings
         with st.expander("⚙️ Customer Specification Settings (Optional)", expanded=False):
-            st.info("Leave LSL/USL as 0 if not available. Ca/Cp/Cpk will remain 0.")
+            st.info("If LSL/USL are left as 0, Ca/Cp/Cpk will show as 'N/A'.")
             specs = {}
             for target in available_targets:
                 st.markdown(f"**{target}**")
@@ -88,14 +88,15 @@ if uploaded_file:
                         # Fetch Specs
                         lsl, usl, tgt = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
                         
-                        # --- SPC LOGIC ---
+                        # --- SPC LOGIC: Check for missing Specs ---
                         if lsl == 0 and usl == 0:
-                            ca, cp, cpk = 0.0, 0.0, 0.0
+                            ca_display, cp_display, cpk_display = "N/A (No Specs)", "N/A", "N/A"
                             spec_active = False
                         else:
                             ca = ((mean - tgt) / ((usl - lsl) / 2)) * 100 if usl != lsl else 0
                             cp = (usl - lsl) / (6 * std) if std > 0 else 0
                             cpk = min((usl - mean)/(3*std), (mean - lsl)/(3*std)) if std > 0 else 0
+                            ca_display, cp_display, cpk_display = f"{ca:.1f}%", f"{cp:.3f}", f"{cpk:.3f}"
                             spec_active = True
 
                         # 1. DISTRIBUTION CHART
@@ -126,15 +127,15 @@ if uploaded_file:
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
-                        # 2. METRICS CARD
+                        # 2. METRICS CARD (with N/A handling)
                         st.markdown(f"""
                         <div style="padding:12px; border-radius:8px; border-left: 6px solid #4F81BD; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
-                            <span style="font-size:16px;"><b>Cpk: {cpk:.3f}</b> | <b>Cp: {cp:.3f}</b> | <b>Ca: {ca:.1f}%</b></span><br>
+                            <span style="font-size:16px;"><b>Cpk: {cpk_display}</b> | <b>Cp: {cp_display}</b> | <b>Ca: {ca_display}</b></span><br>
                             <span style="color:#666; font-size:13px;">Mean: {mean:.2f} | Std: {std:.3f} | n: {count}</span>
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # 3. TRENDING CHART (UCL & LCL focus)
+                        # 3. TRENDING CHART (UCL & LCL)
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
