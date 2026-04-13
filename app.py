@@ -200,21 +200,7 @@ if uploaded_file:
                                     borderpad=4,
                                 ),
                             )
-
-                        # Target line
-                        fig_dist.add_vline(
-                            x=target_val,
-                            line=dict(color='#22c55e', width=1.8, dash='dot'),
-                            annotation=dict(
-                                text=f"<b>TGT</b><br>{target_val:.1f}",
-                                font=dict(color='#22c55e', size=10, family='Arial'),
-                                bgcolor='rgba(255,255,255,0.9)',
-                                bordercolor='#22c55e',
-                                borderwidth=1,
-                                borderpad=4,
-                            ),
-                        )
-
+                        
                         # Mean line
                         fig_dist.add_vline(
                             x=mean,
