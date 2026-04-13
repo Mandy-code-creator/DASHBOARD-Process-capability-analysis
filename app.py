@@ -13,69 +13,75 @@ uploaded_file = st.file_uploader("Upload Data File (CSV or Excel)", type=['csv',
 
 if uploaded_file:
     try:
+        # Read file
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Clean column names (strip whitespace to prevent hidden KeyErrors)
+        # Clean column names (remove hidden spaces)
         df.columns = df.columns.str.strip()
 
         st.markdown("---")
         st.markdown("### 🎛️ Global Data Filters")
         
-        # Safely identify columns (Fallback to index if specific names are missing)
-        line_col = 'LINE' if 'LINE' in df.columns else (df.select_dtypes(include='object').columns[0] if len(df.select_dtypes(include='object').columns) > 0 else df.columns[0])
-        grade_col = '鋼種' if '鋼種' in df.columns else (df.select_dtypes(include='object').columns[1] if len(df.select_dtypes(include='object').columns) > 1 else df.columns[1])
-        width_col = '訂單寬度' if '訂單寬度' in df.columns else (df.select_dtypes(include='number').columns[0] if len(df.select_dtypes(include='number').columns) > 0 else df.columns[2])
+        # EXACT COLUMN MATCHING based on your uploaded images
+        req_filters = ['LINE', '鋼種', '訂單寬度']
+        missing_filters = [c for c in req_filters if c not in df.columns]
+        
+        if missing_filters:
+            st.error(f"Missing required filter columns: {', '.join(missing_filters)}. Please ensure your Excel file contains 'LINE', '鋼種', and '訂單寬度'.")
+            st.stop()
 
-        # Modern horizontal filter layout
         col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
-            lines = st.multiselect(f"Factory Line ({line_col})", options=df[line_col].dropna().unique(), default=df[line_col].dropna().unique())
+            lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=df['LINE'].dropna().unique())
         with col_f2:
-            grades = st.multiselect(f"Steel Grade ({grade_col})", options=df[grade_col].dropna().unique(), default=df[grade_col].dropna().unique())
+            grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
         with col_f3:
-            if pd.api.types.is_numeric_dtype(df[width_col]):
-                min_w, max_w = float(df[width_col].min()), float(df[width_col].max())
-                if min_w < max_w:
-                    width_range = st.slider(f"Order Width ({width_col})", min_w, max_w, (min_w, max_w))
-                else:
-                    width_range = (min_w, max_w)
-                    st.info(f"Fixed Width: {min_w}")
+            # Force Order Width to numeric for the slider
+            df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
+            min_w = float(df['訂單寬度'].min())
+            max_w = float(df['訂單寬度'].max())
+            
+            if not pd.isna(min_w) and not pd.isna(max_w) and min_w < max_w:
+                width_range = st.slider("Order Width (訂單寬度)", min_w, max_w, (min_w, max_w))
             else:
-                width_range = None
-                st.info("Width column is not numeric.")
+                width_range = (min_w, max_w)
+                st.info(f"Fixed Width: {min_w}")
 
         # Apply Filters
-        if width_range:
-            filtered_df = df[
-                (df[line_col].isin(lines)) & 
-                (df[grade_col].isin(grades)) & 
-                (df[width_col].between(width_range[0], width_range[1]))
-            ].copy()
-        else:
-            filtered_df = df[
-                (df[line_col].isin(lines)) & 
-                (df[grade_col].isin(grades))
-            ].copy()
+        filtered_df = df[
+            (df['LINE'].isin(lines)) & 
+            (df['鋼種'].isin(grades))
+        ].copy()
+        
+        if width_range[0] != width_range[1] or not pd.isna(width_range[0]):
+            filtered_df = filtered_df[filtered_df['訂單寬度'].between(width_range[0], width_range[1])]
 
         st.markdown("---")
         st.markdown("### 🎯 Capability Parameters")
         
-        # FIX KEY ERROR: Dynamically extract ONLY numeric columns for analysis
-        numeric_cols = filtered_df.select_dtypes(include=np.number).columns.tolist()
+        # Identify Target Columns (YS, TS, EL, skp+t/l) mapping from your images
+        potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
+        available_targets = [c for c in potential_targets if c in df.columns]
         
-        if not numeric_cols:
-            st.error("No numeric columns found in the dataset for analysis.")
+        # Fallback if specific names aren't found
+        if not available_targets:
+            available_targets = filtered_df.select_dtypes(include=np.number).columns.tolist()
+
+        if not available_targets:
+            st.error("No numeric target columns found for analysis.")
             st.stop()
 
         col_prop, col_target, col_lsl, col_usl = st.columns(4)
         
         with col_prop:
-            target_col = st.selectbox("Select Parameter to Analyze", options=numeric_cols)
+            target_col = st.selectbox("Select Parameter to Analyze", options=available_targets)
         
+        # Force target column to numeric
+        filtered_df[target_col] = pd.to_numeric(filtered_df[target_col], errors='coerce')
         data_series = filtered_df[target_col].dropna()
         
         if len(data_series) < 2:
@@ -129,8 +135,17 @@ if uploaded_file:
             st.plotly_chart(fig_hist, use_container_width=True)
 
         with tab2:
+            # Smart X-Axis selection based on your Excel file columns
+            x_axis = filtered_df.index
+            if '生產日期' in filtered_df.columns:
+                x_axis = '生產日期'
+                filtered_df = filtered_df.sort_values('生產日期')
+            elif 'COIL_NO' in filtered_df.columns:
+                x_axis = 'COIL_NO'
+
             fig_trend = px.line(
-                filtered_df.reset_index(), 
+                filtered_df, 
+                x=x_axis,
                 y=target_col, 
                 title=f"Process Trend: {target_col}", 
                 markers=True,
