@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
+from scipy.stats import norm
 
 st.set_page_config(page_title="Process Capability (SPC)", layout="wide", page_icon="📊")
 
@@ -40,25 +42,17 @@ if uploaded_file:
         with col_f2:
             grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
         with col_f3:
-            # Force Order Width to numeric for the slider
+            # FIX: Replaced Slider with Multiselect for cleaner discrete width selection
             df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
-            min_w = float(df['訂單寬度'].min())
-            max_w = float(df['訂單寬度'].max())
-            
-            if not pd.isna(min_w) and not pd.isna(max_w) and min_w < max_w:
-                width_range = st.slider("Order Width (訂單寬度)", min_w, max_w, (min_w, max_w))
-            else:
-                width_range = (min_w, max_w)
-                st.info(f"Fixed Width: {min_w}")
+            unique_widths = sorted(df['訂單寬度'].dropna().unique())
+            selected_widths = st.multiselect("Order Width (訂單寬度)", options=unique_widths, default=unique_widths)
 
         # Apply Filters
         filtered_df = df[
             (df['LINE'].isin(lines)) & 
-            (df['鋼種'].isin(grades))
+            (df['鋼種'].isin(grades)) &
+            (df['訂單寬度'].isin(selected_widths))
         ].copy()
-        
-        if width_range[0] != width_range[1] or not pd.isna(width_range[0]):
-            filtered_df = filtered_df[filtered_df['訂單寬度'].between(width_range[0], width_range[1])]
 
         st.markdown("---")
         st.markdown("### 🎯 Capability Parameters")
@@ -119,20 +113,45 @@ if uploaded_file:
         tab1, tab2 = st.tabs(["📊 Distribution Chart", "📈 Trend Chart"])
 
         with tab1:
-            fig_hist = px.histogram(
-                filtered_df, 
-                x=target_col, 
-                nbins=30, 
-                marginal="box", 
-                title=f"Distribution of {target_col}", 
-                color_discrete_sequence=['#4dabf7'],
-                opacity=0.8
+            # FIX: Create a Figure Object to combine Histogram and Normal Distribution Curve
+            fig_dist = go.Figure()
+
+            # 1. Add Histogram (Set to probability density to match normal curve scale)
+            fig_dist.add_trace(go.Histogram(
+                x=data_series,
+                histnorm='probability density',
+                name='Actual Data',
+                marker_color='#4dabf7',
+                opacity=0.75,
+                xbins=dict(size=(data_series.max() - data_series.min()) / 30) # Approx 30 bins
+            ))
+
+            # 2. Add Theoretical Normal Curve
+            if std > 0:
+                x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
+                y_curve = norm.pdf(x_curve, mean, std)
+                fig_dist.add_trace(go.Scatter(
+                    x=x_curve,
+                    y=y_curve,
+                    mode='lines',
+                    name='Normal Curve',
+                    line=dict(color='#343a40', width=3)
+                ))
+
+            # 3. Add Specification Limits & Target Lines
+            fig_dist.add_vline(x=lsl, line_dash="dash", line_color="red", annotation_text="LSL", annotation_position="top left")
+            fig_dist.add_vline(x=usl, line_dash="dash", line_color="red", annotation_text="USL", annotation_position="top right")
+            fig_dist.add_vline(x=target_val, line_color="green", line_width=2, annotation_text="Target", annotation_position="top right")
+
+            fig_dist.update_layout(
+                title=f"Process Distribution with Normal Curve: {target_col}",
+                xaxis_title=target_col,
+                yaxis_title="Probability Density",
+                bargap=0.05,
+                hovermode="x unified",
+                legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
             )
-            fig_hist.add_vline(x=lsl, line_dash="dash", line_color="red", annotation_text="LSL")
-            fig_hist.add_vline(x=usl, line_dash="dash", line_color="red", annotation_text="USL")
-            fig_hist.add_vline(x=target_val, line_color="green", line_width=2, annotation_text="Target")
-            fig_hist.update_layout(bargap=0.1)
-            st.plotly_chart(fig_hist, use_container_width=True)
+            st.plotly_chart(fig_dist, use_container_width=True)
 
         with tab2:
             # Smart X-Axis selection based on your Excel file columns
