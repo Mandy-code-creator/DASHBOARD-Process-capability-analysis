@@ -95,7 +95,7 @@ if uploaded_file:
                             y_curve = norm.pdf(x_curve, mean, std) * count * bin_w
                             fig_dist.add_trace(go.Scatter(x=x_curve, y=y_curve, mode='lines', line=dict(color='#FFB300', width=2), showlegend=False))
 
-                        # LSL/USL with visible values
+                        # Specification Limits (LSL/USL) shown only in Distribution
                         fig_dist.add_vline(x=lsl, line_color="red", line_width=2)
                         fig_dist.add_annotation(x=lsl, y=0.95, yref='paper', text=f"LSL: {lsl:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="right", xshift=-5)
                         fig_dist.add_vline(x=usl, line_color="red", line_width=2)
@@ -104,15 +104,11 @@ if uploaded_file:
                         fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
 
-                        # Min/Max arrows
-                        fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
-                        fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
-
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} Distribution</b>", x=0.5, xanchor='center'),
                             height=380, plot_bgcolor='white', 
-                            margin=dict(l=40, r=40, b=80, t=100), # Increased bottom/top margin
-                            legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5), # Moved further down
+                            margin=dict(l=40, r=40, b=80, t=100),
+                            legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5),
                             xaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0'),
                             yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
@@ -126,21 +122,22 @@ if uploaded_file:
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # 3. TRENDING CHART
+                        # 3. TRENDING CHART (UCL & LCL ONLY)
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
                         
+                        # Only Mean, UCL, and LCL shown here as per request
                         fig_trend.add_hline(y=mean, line_color="#333", line_width=1.5, annotation_text=f"Mean: {mean:.1f}")
                         fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}")
                         fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}")
-                        fig_trend.add_hline(y=lsl, line_color="red", line_width=1, line_dash="dot", annotation_text=f"LSL: {lsl:.1f}")
-                        fig_trend.add_hline(y=usl, line_color="red", line_width=1, line_dash="dot", annotation_text=f"USL: {usl:.1f}")
                         
+                        # Max/Min Annotations
                         fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()), y=d_max, text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="green"))
                         fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()), y=d_min, text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=1, ax=0, ay=30, font=dict(color="red"))
 
                         fig_trend.update_layout(
+                            title=dict(text=f"<b>{target_col} Trending (UCL/LCL)</b>", x=0.5, xanchor='center'),
                             height=320, plot_bgcolor='#F9F9F9', margin=dict(l=40, r=100, t=30, b=40),
                             xaxis=dict(type='category', showgrid=False, linecolor='black'),
                             yaxis=dict(showgrid=True, gridcolor='#E0E0E0', showline=True, linecolor='black')
