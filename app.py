@@ -21,15 +21,13 @@ if uploaded_file:
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Clean column names (remove hidden spaces)
+        # Clean column names
         df.columns = df.columns.str.strip()
 
         # --- INVISIBLE DATA CORRECTIONS ---
-        # Group GE00 and GE01 together based on management rules
         if '鋼種' in df.columns:
             df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
         
-        # Remove GF from analysis to prevent data errors
         if 'Metallic_Type' in df.columns:
             df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
 
@@ -61,7 +59,7 @@ if uploaded_file:
             (df['訂單寬度'].isin(selected_widths))
         ].copy()
 
-        # --- CRITICAL FIX: IDENTIFY COIL COLUMN & SORT STRICTLY ---
+        # --- IDENTIFY COIL COLUMN & SORT STRICTLY ---
         coil_col = None
         potential_coil_names = ['COIL_NO', 'COIL NO', 'Coil_No', 'CoilNo', '製造批號', 'Batch']
         for col in potential_coil_names:
@@ -80,7 +78,6 @@ if uploaded_file:
         st.markdown("---")
         st.markdown("### 🏆 Comprehensive Process Capability Overview")
         
-        # Identify Target Columns automatically
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in df.columns]
         
@@ -95,7 +92,6 @@ if uploaded_file:
             st.markdown("Adjust the specifications for each parameter. By default, limits are estimated using $\pm 3\sigma$.")
             specs = {}
             for target in available_targets:
-                st.markdown(f"**{target}**")
                 s_mean = filtered_df[target].mean()
                 s_std = filtered_df[target].std()
                 sc1, sc2, sc3 = st.columns(3)
@@ -106,7 +102,6 @@ if uploaded_file:
                 with sc3:
                     u_val = st.number_input(f"USL ({target})", value=float(s_mean + 3*s_std), key=f"u_{target}")
                 specs[target] = {'tgt': t_val, 'lsl': l_val, 'usl': u_val}
-                st.write("")
 
         # --- DRAW PARALLEL CHARTS ---
         st.markdown("---")
@@ -120,12 +115,11 @@ if uploaded_file:
                     col = grid_cols[j]
                     
                     with col:
-                        # Clean data for specific target
+                        # Clean data
                         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
                         
-                        # Remove duplicate coils to prevent vertical line glitches
                         if coil_col:
                             analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
 
@@ -149,94 +143,75 @@ if uploaded_file:
 
                         st.subheader(f"Analysis: {target_col}")
 
-                        # ── 1. DISTRIBUTION CHART ──────────────────────────────────────────
-                        fig_dist = go.Figure()
+                        # =====================================================================
+                        # 1. DISTRIBUTION CHART (Stacked, Boxed, Dark Blue + Normal Curve)
+                        # =====================================================================
+                        has_grade = '鋼種' in analysis_df.columns and analysis_df['鋼種'].nunique() > 0
+                        dark_blue_palette = ['#4F81BD', '#1F497D', '#8DB4E2', '#B8CCE4', '#003366']
 
-                        # ±1σ / ±2σ / ±3σ background shading
+                        if has_grade:
+                            fig_dist = px.histogram(
+                                analysis_df, x=target_col, color='鋼種', nbins=20, 
+                                barmode='stack', color_discrete_sequence=dark_blue_palette
+                            )
+                        else:
+                            fig_dist = px.histogram(
+                                analysis_df, x=target_col, nbins=20, color_discrete_sequence=['#4F81BD']
+                            )
+                            
+                        fig_dist.update_traces(marker_line_color='white', marker_line_width=1.5, opacity=0.9)
+
+                        # Add Normal Curve
                         if std > 0:
-                            for x0, x1, fill in [
-                                (mean - 3*std, mean - 2*std, 'rgba(239,68,68,0.07)'),
-                                (mean + 2*std, mean + 3*std, 'rgba(239,68,68,0.07)'),
-                                (mean - 2*std, mean - 1*std, 'rgba(245,158,11,0.07)'),
-                                (mean + 1*std, mean + 2*std, 'rgba(245,158,11,0.07)'),
-                                (mean - 1*std, mean + 1*std, 'rgba(34,197,94,0.07)'),
-                            ]:
-                                fig_dist.add_vrect(x0=x0, x1=x1, fillcolor=fill, layer='below', line_width=0)
-
-                        # Histogram bars
-                        fig_dist.add_trace(go.Histogram(
-                            x=data_series,
-                            histnorm='probability density',
-                            name='Data',
-                            marker=dict(
-                                color='rgba(59,130,246,0.5)',
-                                line=dict(color='rgba(37,99,235,0.8)', width=0.7),
-                            ),
-                            nbinsx=min(40, max(10, count // 5)),
-                        ))
-
-                        # Normal curve
-                        if std > 0:
-                            x_curve = np.linspace(data_series.min() - 2*std, data_series.max() + 2*std, 500)
+                            x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
+                            bin_width = (data_series.max() - data_series.min()) / 20 if data_series.max() > data_series.min() else 1
+                            y_curve = norm.pdf(x_curve, mean, std) * count * bin_width
+                            
                             fig_dist.add_trace(go.Scatter(
-                                x=x_curve,
-                                y=norm.pdf(x_curve, mean, std),
-                                mode='lines',
-                                name='Normal Curve',
-                                line=dict(color='#1e293b', width=2.5),
+                                x=x_curve, y=y_curve, mode='lines', name='Normal Curve', 
+                                line=dict(color='#FFB300', width=2.5), showlegend=False
                             ))
 
-                        # LSL / USL lines with annotation boxes
-                        for val, label, color in [(lsl, 'LSL', '#ef4444'), (usl, 'USL', '#ef4444')]:
-                            fig_dist.add_vline(
-                                x=val,
-                                line=dict(color=color, width=1.8, dash='dash'),
-                                annotation=dict(
-                                    text=f"<b>{label}</b><br>{val:.1f}",
-                                    font=dict(color=color, size=10, family='Arial'),
-                                    bgcolor='rgba(255,255,255,0.9)',
-                                    bordercolor=color,
-                                    borderwidth=1,
-                                    borderpad=4,
-                                ),
-                            )
+                        # LSL & USL (Solid Red Lines) - NO TGT LINE
+                        fig_dist.add_vline(x=lsl, line_width=2, line_dash="solid", line_color="red")
+                        fig_dist.add_annotation(x=lsl, y=0.98, yref='paper', text=f"<b>LSL<br>{lsl:.0f}</b>", showarrow=False, font=dict(color="red", size=11), xanchor="right", xshift=-5)
                         
-                        # Mean line
-                        fig_dist.add_vline(
-                            x=mean,
-                            line=dict(color='#3b82f6', width=1.5, dash='dot'),
-                            annotation=dict(
-                                text=f"<b>X̄</b><br>{mean:.2f}",
-                                font=dict(color='#3b82f6', size=10, family='Arial'),
-                                bgcolor='rgba(255,255,255,0.9)',
-                                bordercolor='#3b82f6',
-                                borderwidth=1,
-                                borderpad=4,
-                            ),
-                        )
+                        fig_dist.add_vline(x=usl, line_width=2, line_dash="solid", line_color="red")
+                        fig_dist.add_annotation(x=usl, y=0.98, yref='paper', text=f"<b>USL<br>{usl:.0f}</b>", showarrow=False, font=dict(color="red", size=11), xanchor="left", xshift=5)
+
+                        # Mean Boxes
+                        if has_grade:
+                            for idx_trace, trace in enumerate(fig_dist.data):
+                                if trace.name == 'Normal Curve': continue 
+                                grade_mean = analysis_df[analysis_df['鋼種'] == trace.name][target_col].mean()
+                                if pd.notna(grade_mean):
+                                    fig_dist.add_vline(x=grade_mean, line_width=1.5, line_dash="dash", line_color="#333333")
+                                    y_pos = 0.80 - (idx_trace % 5) * 0.12 
+                                    fig_dist.add_annotation(
+                                        x=grade_mean, y=y_pos, yref='paper', text=f"<b>{grade_mean:.1f}</b>",
+                                        showarrow=False, font=dict(color="white", size=10),
+                                        bgcolor=trace.marker.color, bordercolor="black", borderwidth=1, borderpad=3, xanchor="center"
+                                    )
+                        else:
+                            fig_dist.add_vline(x=mean, line_width=1.5, line_dash="dash", line_color="#333333")
+                            fig_dist.add_annotation(
+                                x=mean, y=0.80, yref='paper', text=f"<b>{mean:.1f}</b>", showarrow=False, font=dict(color="white", size=10),
+                                bgcolor="#4F81BD", bordercolor="black", borderwidth=1, borderpad=3, xanchor="center"
+                            )
 
                         fig_dist.update_layout(
-                            height=350,
-                            margin=dict(l=20, r=20, t=40, b=20),
-                            showlegend=False,
-                            bargap=0.04,
-                            paper_bgcolor='white',
-                            plot_bgcolor='white',
-                            font=dict(family='Arial, sans-serif', size=11, color='#334155'),
-                            xaxis=dict(
-                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
-                                linecolor='#e2e8f0', tickfont=dict(size=10),
-                                title=dict(text=target_col, font=dict(size=11, color='#64748b')),
-                            ),
-                            yaxis=dict(
-                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
-                                linecolor='#e2e8f0', tickfont=dict(size=10),
-                                title=dict(text='Density', font=dict(size=11, color='#64748b')),
-                            ),
+                            title=dict(text=f"<b>{target_col} (Overall)</b>", font=dict(size=14, color='black'), x=0.5, xanchor='center'),
+                            height=380, margin=dict(l=20, r=20, t=40, b=60), showlegend=True,
+                            legend=dict(title="", font=dict(size=10), orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
+                            plot_bgcolor='white', xaxis_title="", yaxis_title="",
+                            xaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True),
+                            yaxis=dict(showgrid=False, zeroline=False, showline=True, linewidth=1, linecolor='black', mirror=True)
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
-                        # ── 2. HTML METRICS CARD (original, unchanged) ─────────
+                        # =====================================================================
+                        # 2. HTML METRICS CARD
+                        # =====================================================================
                         is_capable = cpk >= 1.33
                         icon = "✅" if is_capable else "❌"
                         status_text = "Capable" if is_capable else "Not Capable"
@@ -263,117 +238,103 @@ if uploaded_file:
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
 
-                        # ── 3. TREND CHART ─────────────────────────────────────
+                        # =====================================================================
+                        # 3. TREND CHART (With Shading, Regression, and MAX/MIN/MEAN)
+                        # =====================================================================
                         x_data = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         y_data = analysis_df[target_col].values
+
+                        # Data Extremes
+                        d_max = data_series.max()
+                        d_min = data_series.min()
+                        idx_max = data_series.idxmax()
+                        idx_min = data_series.idxmin()
+                        x_max = analysis_df.loc[idx_max, coil_col] if coil_col else str(idx_max)
+                        x_min = analysis_df.loc[idx_min, coil_col] if coil_col else str(idx_min)
 
                         # Regression trend line
                         xi = np.arange(len(y_data))
                         z = np.polyfit(xi, y_data, 1)
                         trend_line = np.poly1d(z)(xi)
 
-                        # OOC mask
                         oos_mask = (y_data < lsl) | (y_data > usl)
 
                         fig_trend = go.Figure()
 
-                        # ±3σ / ±1σ background bands
+                        # ±1σ / ±2σ / ±3σ background shading
                         if std > 0:
-                            fig_trend.add_hrect(
-                                y0=mean - 3*std, y1=mean + 3*std,
-                                fillcolor='rgba(59,130,246,0.04)',
-                                layer='below', line_width=0,
-                            )
-                            fig_trend.add_hrect(
-                                y0=mean - std, y1=mean + std,
-                                fillcolor='rgba(34,197,94,0.06)',
-                                layer='below', line_width=0,
-                            )
+                            for x0, x1, fill in [
+                                (mean - 3*std, mean - 2*std, 'rgba(239,68,68,0.07)'),
+                                (mean + 2*std, mean + 3*std, 'rgba(239,68,68,0.07)'),
+                                (mean - 2*std, mean - 1*std, 'rgba(245,158,11,0.07)'),
+                                (mean + 1*std, mean + 2*std, 'rgba(245,158,11,0.07)'),
+                                (mean - 1*std, mean + 1*std, 'rgba(34,197,94,0.07)'),
+                            ]:
+                                fig_trend.add_hrect(y0=x0, y1=x1, fillcolor=fill, layer='below', line_width=0)
 
-                        # Main process line — in-spec points blue, OOC red
+                        # Main process line
                         fig_trend.add_trace(go.Scatter(
-                            x=x_data,
-                            y=y_data,
-                            mode='lines+markers',
-                            name='Process Data',
-                            line=dict(color='#94a3b8', width=1.3),
-                            marker=dict(
-                                size=5,
-                                color=['#ef4444' if m else '#3b82f6' for m in oos_mask],
-                                line=dict(width=0),
-                            ),
+                            x=x_data, y=y_data, mode='lines+markers', name='Process Data',
+                            line=dict(color='#94a3b8', width=1.5),
+                            marker=dict(size=6, color=['#ef4444' if m else '#3b82f6' for m in oos_mask], line=dict(width=0))
                         ))
 
                         # OOC cross markers
                         if oos_mask.any():
                             fig_trend.add_trace(go.Scatter(
-                                x=x_data[oos_mask],
-                                y=y_data[oos_mask],
-                                mode='markers',
-                                marker=dict(
-                                    color='#ef4444', size=9,
-                                    symbol='x-thin',
-                                    line=dict(width=2.5, color='#ef4444'),
-                                ),
-                                name='OOC',
+                                x=x_data[oos_mask], y=y_data[oos_mask], mode='markers',
+                                marker=dict(color='#ef4444', size=10, symbol='x', line=dict(width=2, color='#ef4444')), name='OOC'
                             ))
 
                         # Regression trend line
                         fig_trend.add_trace(go.Scatter(
-                            x=x_data,
-                            y=trend_line,
-                            mode='lines',
-                            name='Trend',
-                            line=dict(color='#8b5cf6', width=2, dash='dash'),
+                            x=x_data, y=trend_line, mode='lines', name='Trend', line=dict(color='#8b5cf6', width=2, dash='dash')
                         ))
 
-                        # Reference lines: Mean, LSL, USL, ±3σ
+                        # Annotate Data Max / Min
+                        fig_trend.add_annotation(
+                            x=x_max, y=d_max, text=f"<b>MAX: {d_max:.1f}</b>",
+                            showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="green", size=10)
+                        )
+                        fig_trend.add_annotation(
+                            x=x_min, y=d_min, text=f"<b>MIN: {d_min:.1f}</b>",
+                            showarrow=True, arrowhead=1, ax=0, ay=30, font=dict(color="red", size=10)
+                        )
+
+                        # Reference lines: Mean, LSL, USL, ±3σ (Control Limits)
                         ref_lines = [
-                            (mean,          f'X̄={mean:.2f}',       '#3b82f6', 'dot'),
-                            (lsl,           f'LSL={lsl:.1f}',       '#ef4444', 'dash'),
-                            (usl,           f'USL={usl:.1f}',       '#ef4444', 'dash'),
+                            (mean, f'MEAN = {mean:.1f}', '#3b82f6', 'solid'),
+                            (lsl, f'LSL = {lsl:.1f}', '#ef4444', 'dash'),
+                            (usl, f'USL = {usl:.1f}', '#ef4444', 'dash'),
                         ]
                         if std > 0:
                             ref_lines += [
-                                (mean + 3*std, f'+3σ={mean+3*std:.1f}', '#f59e0b', 'longdash'),
-                                (mean - 3*std, f'−3σ={mean-3*std:.1f}', '#f59e0b', 'longdash'),
+                                (mean + 3*std, f'UCL (+3σ) = {mean+3*std:.1f}', '#f59e0b', 'dot'),
+                                (mean - 3*std, f'LCL (-3σ) = {mean-3*std:.1f}', '#f59e0b', 'dot'),
                             ]
 
                         for y_val, label, color, dash in ref_lines:
                             fig_trend.add_hline(
-                                y=y_val,
-                                line=dict(color=color, width=1.2, dash=dash),
+                                y=y_val, line=dict(color=color, width=1.5, dash=dash),
                                 annotation=dict(
-                                    text=f"<b>{label}</b>",
-                                    font=dict(color=color, size=9, family='Arial'),
-                                    bgcolor='rgba(255,255,255,0.85)',
-                                    xanchor='right',
+                                    text=f"<b>{label}</b>", font=dict(color=color, size=10, family='Arial'),
+                                    bgcolor='rgba(255,255,255,0.85)', xanchor='right'
                                 ),
                                 annotation_position='right',
                             )
 
                         fig_trend.update_layout(
-                            height=250,
-                            margin=dict(l=20, r=90, t=10, b=20),
-                            showlegend=False,
-                            paper_bgcolor='white',
-                            plot_bgcolor='white',
-                            font=dict(family='Arial, sans-serif', size=11, color='#334155'),
+                            height=320, margin=dict(l=20, r=110, t=10, b=20),
+                            showlegend=False, paper_bgcolor='white', plot_bgcolor='white',
                             xaxis=dict(
-                                type='category',
-                                categoryorder='array',
-                                categoryarray=x_data.tolist(),
-                                showgrid=False,
-                                linecolor='#e2e8f0',
-                                tickfont=dict(size=8, color='#94a3b8'),
-                                title=dict(text='Coil Sequence', font=dict(size=10, color='#94a3b8')),
-                                nticks=12,
+                                type='category', categoryorder='array', categoryarray=x_data.tolist(),
+                                showgrid=False, linecolor='#e2e8f0', tickfont=dict(size=9, color='#94a3b8'),
+                                title=dict(text='Coil Sequence', font=dict(size=11, color='#94a3b8')), nticks=15
                             ),
                             yaxis=dict(
-                                showgrid=True, gridcolor='#f1f5f9', gridwidth=1,
-                                linecolor='#e2e8f0', tickfont=dict(size=10),
-                                title=dict(text=target_col, font=dict(size=10, color='#64748b')),
-                            ),
+                                showgrid=True, gridcolor='#f1f5f9', linecolor='#e2e8f0',
+                                title=dict(text=target_col, font=dict(size=11, color='#64748b'))
+                            )
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
                         st.markdown("<br>", unsafe_allow_html=True)
