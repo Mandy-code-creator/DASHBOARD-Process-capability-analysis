@@ -57,7 +57,7 @@ if uploaded_file:
         st.markdown("---")
         st.markdown("### 🎯 Capability Parameters")
         
-        # Identify Target Columns (YS, TS, EL, skp+t/l) mapping from your images
+        # Identify Target Columns
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in df.columns]
         
@@ -69,8 +69,7 @@ if uploaded_file:
             st.error("No numeric target columns found for analysis.")
             st.stop()
             
-        # --- NEW: IDENTIFY COIL NUMBER COLUMN ---
-        # Look for a column that represents the Coil ID
+        # --- IDENTIFY COIL NUMBER COLUMN ---
         coil_col = None
         potential_coil_names = ['COIL_NO', 'COIL NO', 'Coil_No', 'CoilNo', '製造批號', 'Batch']
         for col in potential_coil_names:
@@ -78,7 +77,7 @@ if uploaded_file:
                 coil_col = col
                 break
         
-        # If no explicit coil column is found, use the DataFrame index as a fallback
+        # Fallback if no coil column
         if not coil_col:
             filtered_df['COIL_INDEX'] = range(1, len(filtered_df) + 1)
             coil_col = 'COIL_INDEX'
@@ -88,14 +87,26 @@ if uploaded_file:
         with col_prop:
             target_col = st.selectbox("Select Parameter to Analyze", options=available_targets)
         
-        # Ensure the coil column is string for categorical plotting (unless it's our fallback index)
+        # Ensure coil col is string
         if coil_col != 'COIL_INDEX':
             filtered_df[coil_col] = filtered_df[coil_col].astype(str)
 
-        # Drop rows where the target value is missing, but keep the coil number
+        # --- CRITICAL FIX: SORTING CHRONOLOGICALLY ---
+        # Sort data by production date/time to prevent spaghetti charts
+        time_cols = [c for c in ['生產日期', '開始時間', 'Time', 'Date', '生產年'] if c in filtered_df.columns]
+        if time_cols:
+            filtered_df = filtered_df.sort_values(by=time_cols)
+        else:
+            # Fallback to original Excel row order
+            filtered_df = filtered_df.sort_index()
+
         analysis_df = filtered_df.dropna(subset=[target_col]).copy()
         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
-        analysis_df = analysis_df.dropna(subset=[target_col]) # Drop again if coercion created NaNs
+        analysis_df = analysis_df.dropna(subset=[target_col])
+        
+        # Remove duplicate coil testing (keep the latest test) to prevent vertical lines in the chart
+        if coil_col != 'COIL_INDEX':
+            analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
 
         data_series = analysis_df[target_col]
         
@@ -199,9 +210,14 @@ if uploaded_file:
             fig_trend.add_hline(y=lsl, line_dash="dash", line_color="red", annotation_text="LSL")
             fig_trend.add_hline(y=usl, line_dash="dash", line_color="red", annotation_text="USL")
             
+            # --- CRITICAL FIX: FORCE X-AXIS ARRAY ORDER ---
             fig_trend.update_layout(
                 xaxis_title="Coil Number" if coil_col != 'COIL_INDEX' else "Production Sequence",
-                xaxis=dict(type='category') # Force categorical axis to ensure coils aren't treated as numbers if they look numeric
+                xaxis=dict(
+                    type='category',
+                    categoryorder='array',
+                    categoryarray=analysis_df[coil_col].tolist() # STRICTLY ENFORCE ORDER
+                )
             )
             
             st.plotly_chart(fig_trend, use_container_width=True)
