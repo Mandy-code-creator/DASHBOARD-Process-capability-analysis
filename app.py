@@ -145,11 +145,15 @@ if uploaded_file:
                         # ==========================================
                         # ==========================================
                         # ==========================================
-                        # 1. DISTRIBUTION CHART (Stacked & Boxed Style)
+                        # ==========================================
+                        # 1. DISTRIBUTION CHART (Stacked, Boxed, Dark Blue + Normal Curve)
                         # ==========================================
                         has_grade = '鋼種' in analysis_df.columns and analysis_df['鋼種'].nunique() > 0
                         
-                        # Draw Stacked Histogram
+                        # Use dark blue color palette
+                        dark_blue_palette = ['#1F497D', '#4F81BD', '#8DB4E2', '#B8CCE4', '#003366']
+
+                        # Draw Stacked Histogram (Counts)
                         if has_grade:
                             fig_dist = px.histogram(
                                 analysis_df, 
@@ -157,18 +161,32 @@ if uploaded_file:
                                 color='鋼種',
                                 nbins=20, 
                                 barmode='stack',
-                                color_discrete_sequence=px.colors.qualitative.Set1 # Distinct professional colors
+                                color_discrete_sequence=dark_blue_palette
                             )
                         else:
                             fig_dist = px.histogram(
                                 analysis_df, 
                                 x=target_col, 
                                 nbins=20, 
-                                color_discrete_sequence=['#5A9BD4']
+                                color_discrete_sequence=['#1F497D']
                             )
                             
-                        # Apply white borders to make grid cells distinct ("các ô kẻ rõ ràng")
+                        # Apply white borders to make grid cells distinct
                         fig_dist.update_traces(marker_line_color='white', marker_line_width=1.5, opacity=0.85)
+
+                        # --- ADD NORMAL CURVE (Scaled to match Count Histogram) ---
+                        if std > 0:
+                            x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
+                            # Approximate bin width to scale PDF to Counts
+                            bin_width = (data_series.max() - data_series.min()) / 20 if data_series.max() > data_series.min() else 1
+                            y_curve = norm.pdf(x_curve, mean, std) * count * bin_width
+                            
+                            fig_dist.add_trace(go.Scatter(
+                                x=x_curve, y=y_curve, 
+                                mode='lines', name='Normal Curve', 
+                                line=dict(color='#FFB300', width=2.5), # Orange curve
+                                showlegend=False
+                            ))
 
                         # LSL & USL (Solid Red Lines with Top Annotations)
                         fig_dist.add_vline(x=lsl, line_width=2, line_dash="solid", line_color="red")
@@ -190,9 +208,11 @@ if uploaded_file:
                             showarrow=False, font=dict(color="#0275d8", size=10), xanchor="right", xshift=-5
                         )
 
-                        # Add Group Means with Colored Boxes (Matching the reference image)
+                        # Add Group Means with Colored Boxes
                         if has_grade:
                             for i, trace in enumerate(fig_dist.data):
+                                if trace.name == 'Normal Curve': continue # Skip normal curve trace
+                                
                                 grade_name = trace.name
                                 grade_color = trace.marker.color
                                 grade_mean = analysis_df[analysis_df['鋼種'] == grade_name][target_col].mean()
@@ -222,9 +242,13 @@ if uploaded_file:
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} (Overall)</b>", font=dict(size=14, color='black'), x=0.5, xanchor='center'),
                             height=380, 
-                            margin=dict(l=20, r=20, t=50, b=20), 
+                            margin=dict(l=20, r=20, t=60, b=20), # Increased top margin for legend
                             showlegend=True,
-                            legend=dict(title="", font=dict(size=10), bordercolor="black", borderwidth=1, yanchor="top", y=0.99, xanchor="right", x=0.99, bgcolor="rgba(255,255,255,0.8)"),
+                            # FIX LEGEND OVERLAP: Move legend horizontally above the chart
+                            legend=dict(
+                                title="", font=dict(size=10), 
+                                orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5
+                            ),
                             plot_bgcolor='white',
                             xaxis_title="",
                             yaxis_title="",
