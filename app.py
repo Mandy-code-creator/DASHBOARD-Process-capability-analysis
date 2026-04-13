@@ -148,69 +148,91 @@ if uploaded_file:
                         cp = (usl - lsl) / (6 * std) if std > 0 else 0
                         cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
 
-                        st.subheader(f"Analysis: {target_col}")
-
-                        # 1. DISTRIBUTION CHART (Histogram + Normal Curve)
+                        # ==========================================
+                        # 1. DISTRIBUTION CHART (Professional Style)
+                        # ==========================================
                         fig_dist = go.Figure()
+                        
+                        # Histogram with clean borders
                         fig_dist.add_trace(go.Histogram(
-                            x=data_series, histnorm='probability density', name='Actual Data', marker_color='#4dabf7', opacity=0.75
+                            x=data_series, 
+                            histnorm='probability density', 
+                            name='Actual Data', 
+                            marker=dict(color='#5A9BD4', line=dict(color='white', width=1)), 
+                            opacity=0.85
                         ))
+                        
+                        # Smooth Normal Curve
                         if std > 0:
                             x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
                             fig_dist.add_trace(go.Scatter(
-                                x=x_curve, y=norm.pdf(x_curve, mean, std), mode='lines', name='Normal Curve', line=dict(color='#343a40', width=2.5)
+                                x=x_curve, y=norm.pdf(x_curve, mean, std), 
+                                mode='lines', name='Normal Curve', 
+                                line=dict(color='#FF9D00', width=3)
                             ))
                         
-                        fig_dist.add_vline(x=lsl, line_dash="dash", line_color="#d9534f", annotation_text="LSL")
-                        fig_dist.add_vline(x=usl, line_dash="dash", line_color="#d9534f", annotation_text="USL")
-                        fig_dist.add_vline(x=target_val, line_color="#5cb85c", line_width=2, annotation_text="TGT")
+                        # Spec Lines
+                        fig_dist.add_vline(x=lsl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text=f"LSL: {lsl:.1f}", annotation_position="top left")
+                        fig_dist.add_vline(x=usl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text=f"USL: {usl:.1f}", annotation_position="top right")
+                        fig_dist.add_vline(x=target_val, line_dash="dot", line_color="#4CAF50", line_width=2, annotation_text="TGT", annotation_position="top right")
+                        fig_dist.add_vline(x=mean, line_dash="solid", line_color="#333333", line_width=1.5, annotation_text=f"Mean: {mean:.1f}", annotation_position="top left")
                         
-                        fig_dist.update_layout(height=350, margin=dict(l=20, r=20, t=30, b=20), showlegend=False, bargap=0.05)
+                        fig_dist.update_layout(
+                            title=dict(text=f"<b>Distribution: {target_col}</b>", font=dict(size=16)),
+                            height=320, 
+                            margin=dict(l=20, r=20, t=50, b=20), 
+                            showlegend=False, 
+                            bargap=0.05,
+                            template='plotly_white',
+                            yaxis=dict(showticklabels=False, showgrid=False)
+                        )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
+                        # ==========================================
                         # 2. HTML METRICS CARD
+                        # ==========================================
                         is_capable = cpk >= 1.33
                         icon = "✅" if is_capable else "❌"
                         status_text = "Capable" if is_capable else "Not Capable"
                         border_color = "#28a745" if is_capable else "#dc3545"
                         
                         card_html = f"""
-                        <div style="border: 1px solid #e0e0e0; border-left: 6px solid {border_color}; border-radius: 8px; background-color: #fafafa; padding: 15px; margin-bottom: 10px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
-                            <div style="display: flex; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;">
-                                <span style="font-size: 16px; font-weight: 700; color: {border_color}; min-width: 130px;">{icon} {status_text}</span>
-                                <span style="color: #aaa;">|</span>
-                                <span style="font-family: monospace; font-size: 13px; color: #333;"><b>LSL:</b> {lsl:.0f} &nbsp;&nbsp; <b>USL:</b> {usl:.0f}</span>
-                                <span style="color: #aaa;">|</span>
-                                <span style="font-family: monospace; font-size: 13px; color: #333;"><b>n:</b> {count} &nbsp;&nbsp; <b>Mean:</b></span>
+                        <div style="border: 1px solid #e0e0e0; border-left: 6px solid {border_color}; border-radius: 8px; background-color: #ffffff; padding: 12px; margin-bottom: 10px; box-shadow: 0px 2px 4px rgba(0,0,0,0.05);">
+                            <div style="display: flex; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 6px; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
+                                <span style="font-size: 15px; font-weight: bold; color: {border_color}; min-width: 120px;">{icon} {status_text}</span>
+                                <span style="color: #ccc;">|</span>
+                                <span style="font-family: monospace; font-size: 13px; color: #444;"><b>LSL:</b> {lsl:.1f} &nbsp;&nbsp; <b>USL:</b> {usl:.1f}</span>
+                                <span style="color: #ccc;">|</span>
+                                <span style="font-family: monospace; font-size: 13px; color: #444;"><b>n:</b> {count}</span>
                             </div>
-                            <div style="font-family: monospace; font-size: 13px; color: #333; margin-bottom: 12px; margin-left: 5px;">
-                                {mean:.2f} &nbsp;&nbsp; <b>Std:</b> {std:.3f}
-                            </div>
-                            <div style="display: flex; gap: 20px; font-family: monospace; font-size: 14px; margin-left: 5px;">
+                            <div style="display: flex; justify-content: space-between; font-family: monospace; font-size: 14px; margin-left: 5px; padding-top: 4px;">
+                                <span><b style="color:#555;">Mean:</b> {mean:.2f}</span>
+                                <span><b style="color:#555;">Std:</b> {std:.3f}</span>
                                 <span style="color: #d9534f; font-weight: bold;">Cpk = {cpk:.3f}</span>
                                 <span style="font-weight: bold; color: #333;">Cp = {cp:.3f}</span>
-                                <span style="font-weight: bold; color: #333;">Ca = {ca:.1f}%</span>
                             </div>
                         </div>
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
 
-                        # 3. TREND CHART (ZIGZAG FIXED)
-                        # Determine exact X-axis data
+                        # ==========================================
+                        # 3. TREND CHART (Professional Style)
+                        # ==========================================
                         x_data = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         
                         fig_trend = go.Figure()
                         
+                        # Trend line with clear markers
                         fig_trend.add_trace(go.Scatter(
                             x=x_data,
                             y=analysis_df[target_col],
                             mode='lines+markers',
                             name='Process Data',
-                            line=dict(color='#2c3e50', width=1.5),
-                            marker=dict(size=5, color='#2c3e50')
+                            line=dict(color='#5A9BD4', width=2),
+                            marker=dict(size=7, color='#5A9BD4', line=dict(color='white', width=1))
                         ))
 
-                        # Highlight OOC points
+                        # Highlight OOC points with prominent red circles
                         ooc_df = analysis_df[(analysis_df[target_col] < lsl) | (analysis_df[target_col] > usl)]
                         if not ooc_df.empty:
                             ooc_x = ooc_df[coil_col].astype(str) if coil_col else ooc_df.index.astype(str)
@@ -218,30 +240,34 @@ if uploaded_file:
                                 x=ooc_x,
                                 y=ooc_df[target_col],
                                 mode='markers',
-                                marker=dict(color='#d9534f', size=8, symbol='x'),
+                                marker=dict(color='#E03A3C', size=10, symbol='circle', line=dict(color='white', width=1)),
                                 name='OOC'
                             ))
 
-                        fig_trend.add_hline(y=mean, line_color="#5bc0de", line_width=1.5, line_dash="dash")
-                        fig_trend.add_hline(y=lsl, line_dash="solid", line_color="#d9534f", line_width=1)
-                        fig_trend.add_hline(y=usl, line_dash="solid", line_color="#d9534f", line_width=1)
+                        # Horizontal reference lines
+                        fig_trend.add_hline(y=mean, line_color="#333333", line_width=1.5, line_dash="solid", annotation_text="Mean", annotation_font_size=10)
+                        fig_trend.add_hline(y=lsl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text="LSL", annotation_font_size=10)
+                        fig_trend.add_hline(y=usl, line_dash="dash", line_color="#E03A3C", line_width=2, annotation_text="USL", annotation_font_size=10)
                         
                         fig_trend.update_layout(
-                            height=250, 
-                            margin=dict(l=20, r=20, t=10, b=20),
-                            xaxis_title="Coil Sequence",
+                            title=dict(text=f"<b>Trend: {target_col}</b>", font=dict(size=14)),
+                            height=280, 
+                            margin=dict(l=20, r=20, t=40, b=20),
+                            xaxis_title="",
                             showlegend=False,
+                            template='plotly_white',
                             xaxis=dict(
                                 type='category',
                                 categoryorder='array',
-                                categoryarray=x_data.tolist(), # STRICT ENFORCEMENT OF X-AXIS ORDER
-                                showgrid=False
+                                categoryarray=x_data.tolist(),
+                                showgrid=False,
+                                zeroline=False,
+                                tickangle=45
                             ),
-                            yaxis=dict(showgrid=True, gridcolor='#e0e0e0'),
-                            plot_bgcolor='white'
+                            yaxis=dict(showgrid=True, gridcolor='#eeeeee', zeroline=False)
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
-                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.markdown("<br><br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
