@@ -8,7 +8,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Process Capability (SPC)", layout="wide", page_icon="📊")
 
 st.title("📊 Process Capability Analysis (SPC)")
-st.markdown("Upload your production data to automatically calculate Ca, Cp, Cpk and visualize the process distribution.")
+st.markdown("Upload your production data to automatically calculate Ca, Cp, Cpk and visualize the process distribution by Coil.")
 
 # 1. Upload Data
 uploaded_file = st.file_uploader("Upload Data File (CSV or Excel)", type=['csv', 'xlsx'])
@@ -42,7 +42,7 @@ if uploaded_file:
         with col_f2:
             grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
         with col_f3:
-            # FIX: Replaced Slider with Multiselect for cleaner discrete width selection
+            # Force Order Width to numeric for the dropdown
             df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
             unique_widths = sorted(df['訂單寬度'].dropna().unique())
             selected_widths = st.multiselect("Order Width (訂單寬度)", options=unique_widths, default=unique_widths)
@@ -68,15 +68,36 @@ if uploaded_file:
         if not available_targets:
             st.error("No numeric target columns found for analysis.")
             st.stop()
+            
+        # --- NEW: IDENTIFY COIL NUMBER COLUMN ---
+        # Look for a column that represents the Coil ID
+        coil_col = None
+        potential_coil_names = ['COIL_NO', 'COIL NO', 'Coil_No', 'CoilNo', '製造批號', 'Batch']
+        for col in potential_coil_names:
+            if col in df.columns:
+                coil_col = col
+                break
+        
+        # If no explicit coil column is found, use the DataFrame index as a fallback
+        if not coil_col:
+            filtered_df['COIL_INDEX'] = range(1, len(filtered_df) + 1)
+            coil_col = 'COIL_INDEX'
 
         col_prop, col_target, col_lsl, col_usl = st.columns(4)
         
         with col_prop:
             target_col = st.selectbox("Select Parameter to Analyze", options=available_targets)
         
-        # Force target column to numeric
-        filtered_df[target_col] = pd.to_numeric(filtered_df[target_col], errors='coerce')
-        data_series = filtered_df[target_col].dropna()
+        # Ensure the coil column is string for categorical plotting (unless it's our fallback index)
+        if coil_col != 'COIL_INDEX':
+            filtered_df[coil_col] = filtered_df[coil_col].astype(str)
+
+        # Drop rows where the target value is missing, but keep the coil number
+        analysis_df = filtered_df.dropna(subset=[target_col]).copy()
+        analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
+        analysis_df = analysis_df.dropna(subset=[target_col]) # Drop again if coercion created NaNs
+
+        data_series = analysis_df[target_col]
         
         if len(data_series) < 2:
             st.warning("Not enough data points after filtering. Please adjust your filters.")
@@ -94,8 +115,8 @@ if uploaded_file:
 
         # SPC Calculations
         ca = (mean - target_val) / ((usl - lsl) / 2) if usl != lsl else 0
-        cp = (usl - lsl) / (6 * std) if std != 0 else 0
-        cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std != 0 else 0
+        cp = (usl - lsl) / (6 * std) if std > 0 else 0
+        cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
 
         # Metrics Display
         st.markdown("### 🏆 SPC Results")
@@ -109,24 +130,23 @@ if uploaded_file:
 
         st.markdown("---")
         
-        # Interactive Charts
-        tab1, tab2 = st.tabs(["📊 Distribution Chart", "📈 Trend Chart"])
+        # Interactive Charts & Data Table
+        tab1, tab2, tab3 = st.tabs(["📊 Distribution Chart", "📈 Trend by Coil", "📋 Detail Data"])
 
         with tab1:
-            # FIX: Create a Figure Object to combine Histogram and Normal Distribution Curve
             fig_dist = go.Figure()
 
-            # 1. Add Histogram (Set to probability density to match normal curve scale)
+            # Histogram
             fig_dist.add_trace(go.Histogram(
                 x=data_series,
                 histnorm='probability density',
                 name='Actual Data',
                 marker_color='#4dabf7',
                 opacity=0.75,
-                xbins=dict(size=(data_series.max() - data_series.min()) / 30) # Approx 30 bins
+                xbins=dict(size=(data_series.max() - data_series.min()) / 30 if data_series.max() > data_series.min() else 1)
             ))
 
-            # 2. Add Theoretical Normal Curve
+            # Normal Curve
             if std > 0:
                 x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
                 y_curve = norm.pdf(x_curve, mean, std)
@@ -138,7 +158,7 @@ if uploaded_file:
                     line=dict(color='#343a40', width=3)
                 ))
 
-            # 3. Add Specification Limits & Target Lines
+            # Limits
             fig_dist.add_vline(x=lsl, line_dash="dash", line_color="red", annotation_text="LSL", annotation_position="top left")
             fig_dist.add_vline(x=usl, line_dash="dash", line_color="red", annotation_text="USL", annotation_position="top right")
             fig_dist.add_vline(x=target_val, line_color="green", line_width=2, annotation_text="Target", annotation_position="top right")
@@ -154,26 +174,60 @@ if uploaded_file:
             st.plotly_chart(fig_dist, use_container_width=True)
 
         with tab2:
-            # Smart X-Axis selection based on your Excel file columns
-            x_axis = filtered_df.index
-            if '生產日期' in filtered_df.columns:
-                x_axis = '生產日期'
-                filtered_df = filtered_df.sort_values('生產日期')
-            elif 'COIL_NO' in filtered_df.columns:
-                x_axis = 'COIL_NO'
-
+            # Trend Chart explicitly using COIL_NO as the X-axis
             fig_trend = px.line(
-                filtered_df, 
-                x=x_axis,
+                analysis_df, 
+                x=coil_col,
                 y=target_col, 
-                title=f"Process Trend: {target_col}", 
+                title=f"Process Trend per Coil: {target_col}", 
                 markers=True,
                 color_discrete_sequence=['#ffc000']
             )
+            
+            # Highlight Out of Spec (OOC) points in Red on the trend chart
+            ooc_df = analysis_df[(analysis_df[target_col] < lsl) | (analysis_df[target_col] > usl)]
+            if not ooc_df.empty:
+                fig_trend.add_trace(go.Scatter(
+                    x=ooc_df[coil_col],
+                    y=ooc_df[target_col],
+                    mode='markers',
+                    marker=dict(color='red', size=10, symbol='x'),
+                    name='Out of Spec (OOC)'
+                ))
+
             fig_trend.add_hline(y=mean, line_color="blue", annotation_text="Mean (μ)")
             fig_trend.add_hline(y=lsl, line_dash="dash", line_color="red", annotation_text="LSL")
             fig_trend.add_hline(y=usl, line_dash="dash", line_color="red", annotation_text="USL")
+            
+            fig_trend.update_layout(
+                xaxis_title="Coil Number" if coil_col != 'COIL_INDEX' else "Production Sequence",
+                xaxis=dict(type='category') # Force categorical axis to ensure coils aren't treated as numbers if they look numeric
+            )
+            
             st.plotly_chart(fig_trend, use_container_width=True)
+            
+        with tab3:
+            st.markdown(f"### 📋 Detailed Coil Data for {target_col}")
+            
+            # Create a clean display dataframe
+            display_df = analysis_df[[coil_col, target_col]].copy()
+            
+            # Determine Status
+            display_df['Status'] = 'OK'
+            display_df.loc[display_df[target_col] < lsl, 'Status'] = 'Below LSL'
+            display_df.loc[display_df[target_col] > usl, 'Status'] = 'Above USL'
+            
+            # Function to highlight OOC rows
+            def highlight_ooc(row):
+                if row['Status'] != 'OK':
+                    return ['background-color: #ffcccc'] * len(row)
+                return [''] * len(row)
+                
+            st.dataframe(
+                display_df.style.apply(highlight_ooc, axis=1).format({target_col: "{:.3f}"}),
+                use_container_width=True,
+                hide_index=True
+            )
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
