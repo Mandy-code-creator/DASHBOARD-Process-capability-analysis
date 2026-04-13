@@ -8,7 +8,7 @@ from scipy.stats import norm
 st.set_page_config(page_title="Mechanical Property SPC Dashboard", layout="wide", page_icon="📊")
 
 st.title("📊 Mechanical Property Comprehensive Analysis")
-st.markdown("Automated SPC calculation focusing on Process Control Limits (UCL/LCL).")
+st.markdown("Automated SPC calculation and professional visualization of distribution and process trends.")
 
 # 1. Upload Data
 uploaded_file = st.file_uploader("Upload Excel or CSV file", type=['csv', 'xlsx'])
@@ -49,20 +49,18 @@ if uploaded_file:
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
 
-        # Identify Targets
+        # Identify Target Columns
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
-        # Specifications settings
-        with st.expander("⚙️ Customer Specification Settings (Optional)", expanded=False):
-            st.info("Leave LSL/USL as 0 if not available. Ca/Cp/Cpk will remain 0.")
+        with st.expander("⚙️ Specification Limits Settings (LSL / USL)", expanded=False):
             specs = {}
             for target in available_targets:
-                st.markdown(f"**{target}**")
+                s_mean, s_std = filtered_df[target].mean(), filtered_df[target].std()
                 sc1, sc2, sc3 = st.columns(3)
-                with sc1: t_val = st.number_input(f"Target ({target})", value=0.0, key=f"t_{target}")
-                with sc2: l_val = st.number_input(f"LSL ({target})", value=0.0, key=f"l_{target}")
-                with sc3: u_val = st.number_input(f"USL ({target})", value=0.0, key=f"u_{target}")
+                with sc1: t_val = st.number_input(f"Target ({target})", value=float(s_mean or 0), key=f"t_{target}")
+                with sc2: l_val = st.number_input(f"LSL ({target})", value=float((s_mean or 0) - 3*(s_std or 0)), key=f"l_{target}")
+                with sc3: u_val = st.number_input(f"USL ({target})", value=float((s_mean or 0) + 3*(s_std or 0)), key=f"u_{target}")
                 specs[target] = {'tgt': t_val, 'lsl': l_val, 'usl': u_val}
 
         # --- DRAW GRID VIEW ---
@@ -83,20 +81,13 @@ if uploaded_file:
                         
                         mean, std, count = data_series.mean(), data_series.std(), len(data_series)
                         d_max, d_min = data_series.max(), data_series.min()
+                        lsl, usl, tgt = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
                         ucl, lcl = mean + 3*std, mean - 3*std
                         
-                        # Fetch Specs
-                        lsl, usl, tgt = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
-                        
-                        # --- SPC LOGIC ---
-                        if lsl == 0 and usl == 0:
-                            ca, cp, cpk = 0.0, 0.0, 0.0
-                            spec_active = False
-                        else:
-                            ca = ((mean - tgt) / ((usl - lsl) / 2)) * 100 if usl != lsl else 0
-                            cp = (usl - lsl) / (6 * std) if std > 0 else 0
-                            cpk = min((usl - mean)/(3*std), (mean - lsl)/(3*std)) if std > 0 else 0
-                            spec_active = True
+                        # --- SPC CALCULATIONS ---
+                        ca = ((mean - tgt) / ((usl - lsl) / 2)) * 100 if usl != lsl else 0
+                        cp = (usl - lsl) / (6 * std) if std > 0 else 0
+                        cpk = min((usl - mean)/(3*std), (mean - lsl)/(3*std)) if std > 0 else 0
 
                         # 1. DISTRIBUTION CHART
                         fig_dist = px.histogram(analysis_df, x=target_col, color='鋼種', nbins=20, barmode='stack', color_discrete_sequence=['#1F497D', '#4F81BD', '#8DB4E2'])
@@ -108,45 +99,56 @@ if uploaded_file:
                             y_curve = norm.pdf(x_curve, mean, std) * count * bin_w
                             fig_dist.add_trace(go.Scatter(x=x_curve, y=y_curve, mode='lines', line=dict(color='#FFB300', width=2), showlegend=False))
 
-                        if spec_active:
-                            fig_dist.add_vline(x=lsl, line_color="red", line_width=2)
-                            fig_dist.add_annotation(x=lsl, y=0.95, yref='paper', text=f"LSL: {lsl:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="right", xshift=-5)
-                            fig_dist.add_vline(x=usl, line_color="red", line_width=2)
-                            fig_dist.add_annotation(x=usl, y=0.95, yref='paper', text=f"USL: {usl:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="left", xshift=5)
+                        # Specification Limits (LSL/USL)
+                        fig_dist.add_vline(x=lsl, line_color="red", line_width=2)
+                        fig_dist.add_annotation(x=lsl, y=0.95, yref='paper', text=f"LSL: {lsl:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="right", xshift=-5)
+                        fig_dist.add_vline(x=usl, line_color="red", line_width=2)
+                        fig_dist.add_annotation(x=usl, y=0.95, yref='paper', text=f"USL: {usl:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="left", xshift=5)
                         
+                        # Mean line and Min/Max Annotations
                         fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
+                        fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
+                        fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
 
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} Distribution</b>", x=0.5, xanchor='center'),
-                            height=380, plot_bgcolor='white', margin=dict(l=40, r=40, b=80, t=100),
+                            height=400, plot_bgcolor='white', 
+                            margin=dict(l=40, r=40, b=100, t=100),
                             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5),
                             xaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0'),
                             yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
-                        # 2. METRICS CARD
+                        # 2. UPDATED METRICS CARD (With Cp and Ca)
+                        status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                         st.markdown(f"""
-                        <div style="padding:12px; border-radius:8px; border-left: 6px solid #4F81BD; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                        <div style="padding:12px; border-radius:8px; border-left: 6px solid {status_color}; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                             <span style="font-size:16px;"><b>Cpk: {cpk:.3f}</b> | <b>Cp: {cp:.3f}</b> | <b>Ca: {ca:.1f}%</b></span><br>
                             <span style="color:#666; font-size:13px;">Mean: {mean:.2f} | Std: {std:.3f} | n: {count}</span>
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # 3. TRENDING CHART (UCL & LCL focus)
+                        # 3. TRENDING CHART (UCL & LCL)
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
                         
+                        # Reference lines
                         fig_trend.add_hline(y=mean, line_color="#333", line_width=1.5, annotation_text=f"Mean: {mean:.1f}")
                         fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}")
                         fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}")
                         
+                        # Max/Min Markers on Trend
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()), y=d_max, text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-30, font=dict(color="green"))
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()), y=d_min, text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=1, ax=0, ay=30, font=dict(color="red"))
+
                         fig_trend.update_layout(
-                            title=dict(text=f"<b>{target_col} Trend (Control Limits)</b>", x=0.5, xanchor='center'),
-                            height=320, plot_bgcolor='#F9F9F9', margin=dict(l=40, r=100, t=30, b=40),
-                            xaxis=dict(type='category', showgrid=False, linecolor='black'),
+                            title=dict(text=f"<b>{target_col} Process Trend (Control Limits)</b>", x=0.5, xanchor='center'),
+                            height=320, plot_bgcolor='#F9F9F9', 
+                            margin=dict(l=40, r=100, t=30, b=40),
+                            xaxis=dict(type='category', showgrid=False, linecolor='black', tickangle=45),
                             yaxis=dict(showgrid=True, gridcolor='#E0E0E0', showline=True, linecolor='black')
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
