@@ -139,7 +139,12 @@ if uploaded_file:
                             yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
-
+                        # Thêm đường UCL/LCL vào biểu đồ Distribution
+                        fig_dist.add_vline(x=ucl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
+                        fig_dist.add_annotation(x=ucl, y=0.85, yref='paper', text=f"UCL: {ucl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
+                        
+                        fig_dist.add_vline(x=lcl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
+                        fig_dist.add_annotation(x=lcl, y=0.85, yref='paper', text=f"LCL: {lcl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
                         # 2. METRICS CARD
                         st.markdown(f"""
                         <div style="padding:12px; border-radius:8px; border-left: 6px solid {status_color}; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
