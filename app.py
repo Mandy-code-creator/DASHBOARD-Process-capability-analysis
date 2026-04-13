@@ -3,11 +3,12 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from scipy.stats import norm
 
 st.set_page_config(page_title="Process Capability (SPC)", layout="wide", page_icon="📊")
 
 st.title("📊 Process Capability Analysis (SPC)")
-st.markdown("Upload your production data to automatically calculate Ca, Cp, Cpk and visualize the process distribution.")
+st.markdown("Upload your production data to automatically calculate Ca, Cp, Cpk and visualize the process distribution by Coil.")
 
 # 1. Upload Data
 uploaded_file = st.file_uploader("Upload Data File (CSV or Excel)", type=['csv', 'xlsx'])
@@ -23,18 +24,10 @@ if uploaded_file:
         # Clean column names (remove hidden spaces)
         df.columns = df.columns.str.strip()
 
-        # --- INVISIBLE DATA CORRECTIONS ---
-        # Group GE00 and GE01 together based on management rules
-        if '鋼種' in df.columns:
-            df['鋼種'] = df['鋼種'].replace(['GE00', 'GE01'], 'GE00/GE01')
-        
-        # Remove GF from analysis to prevent data errors
-        if 'Metallic_Type' in df.columns:
-            df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
-
         st.markdown("---")
         st.markdown("### 🎛️ Global Data Filters")
         
+        # EXACT COLUMN MATCHING based on your uploaded images
         req_filters = ['LINE', '鋼種', '訂單寬度']
         missing_filters = [c for c in req_filters if c not in df.columns]
         
@@ -49,6 +42,7 @@ if uploaded_file:
         with col_f2:
             grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
         with col_f3:
+            # Force Order Width to numeric for the dropdown
             df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
             unique_widths = sorted(df['訂單寬度'].dropna().unique())
             selected_widths = st.multiselect("Order Width (訂單寬度)", options=unique_widths, default=unique_widths)
@@ -61,132 +55,205 @@ if uploaded_file:
         ].copy()
 
         st.markdown("---")
-        st.markdown("### 🏆 Comprehensive Process Capability Overview")
+        st.markdown("### 🎯 Capability Parameters")
         
-        # Identify Target Columns automatically
+        # Identify Target Columns
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
         available_targets = [c for c in potential_targets if c in df.columns]
         
+        # Fallback if specific names aren't found
         if not available_targets:
             available_targets = filtered_df.select_dtypes(include=np.number).columns.tolist()
 
         if not available_targets:
             st.error("No numeric target columns found for analysis.")
             st.stop()
-
-        # Create settings expander for Specs (so users can tweak LSL/USL for each chart)
-        with st.expander("⚙️ Specification Limits Settings (LSL / USL / Target)", expanded=False):
-            st.markdown("Adjust the specifications for each parameter. By default, limits are estimated using $\pm 3\sigma$.")
-            specs = {}
-            for target in available_targets:
-                st.markdown(f"**{target}**")
-                s_mean = filtered_df[target].mean()
-                s_std = filtered_df[target].std()
-                sc1, sc2, sc3 = st.columns(3)
-                with sc1:
-                    t_val = st.number_input(f"Target ({target})", value=float(s_mean), key=f"t_{target}")
-                with sc2:
-                    l_val = st.number_input(f"LSL ({target})", value=float(s_mean - 3*s_std), key=f"l_{target}")
-                with sc3:
-                    u_val = st.number_input(f"USL ({target})", value=float(s_mean + 3*s_std), key=f"u_{target}")
-                specs[target] = {'tgt': t_val, 'lsl': l_val, 'usl': u_val}
-                st.write("")
-
-        # --- DRAW PARALLEL CHARTS ---
-        # Create grid columns for parallel side-by-side display
-        grid_cols = st.columns(2)
-        
-        for idx, target_col in enumerate(available_targets):
-            # Select column (Left or Right)
-            col = grid_cols[idx % 2]
             
-            with col:
-                analysis_df = filtered_df.dropna(subset=[target_col]).copy()
-                analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
-                analysis_df = analysis_df.dropna(subset=[target_col])
+        # --- IDENTIFY COIL NUMBER COLUMN ---
+        coil_col = None
+        potential_coil_names = ['COIL_NO', 'COIL NO', 'Coil_No', 'CoilNo', '製造批號', 'Batch']
+        for col in potential_coil_names:
+            if col in df.columns:
+                coil_col = col
+                break
+        
+        # Fallback if no coil column
+        if not coil_col:
+            filtered_df['COIL_INDEX'] = range(1, len(filtered_df) + 1)
+            coil_col = 'COIL_INDEX'
+
+        col_prop, col_target, col_lsl, col_usl = st.columns(4)
+        
+        with col_prop:
+            target_col = st.selectbox("Select Parameter to Analyze", options=available_targets)
+        
+        # Ensure coil col is string
+        if coil_col != 'COIL_INDEX':
+            filtered_df[coil_col] = filtered_df[coil_col].astype(str)
+
+        # --- SORTING CHRONOLOGICALLY ---
+        # Sort data by production date/time to prevent spaghetti charts
+        time_cols = [c for c in ['生產日期', '開始時間', 'Time', 'Date', '生產年'] if c in filtered_df.columns]
+        if time_cols:
+            filtered_df = filtered_df.sort_values(by=time_cols)
+        else:
+            # Fallback to original Excel row order
+            filtered_df = filtered_df.sort_index()
+
+        analysis_df = filtered_df.dropna(subset=[target_col]).copy()
+        analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
+        analysis_df = analysis_df.dropna(subset=[target_col])
+        
+        # Remove duplicate coil testing (keep the latest test) to prevent vertical lines in the chart
+        if coil_col != 'COIL_INDEX':
+            analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
+
+        data_series = analysis_df[target_col]
+        
+        if len(data_series) < 2:
+            st.warning("Not enough data points after filtering. Please adjust your filters.")
+            st.stop()
+
+        mean = data_series.mean()
+        std = data_series.std()
+
+        with col_target:
+            target_val = st.number_input("Target Value", value=float(mean), format="%.3f")
+        with col_lsl:
+            lsl = st.number_input("Lower Spec Limit (LSL)", value=float(mean - 3*std), format="%.3f")
+        with col_usl:
+            usl = st.number_input("Upper Spec Limit (USL)", value=float(mean + 3*std), format="%.3f")
+
+        # SPC Calculations
+        ca = (mean - target_val) / ((usl - lsl) / 2) if usl != lsl else 0
+        cp = (usl - lsl) / (6 * std) if std > 0 else 0
+        cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
+
+        # Metrics Display
+        st.markdown("### 🏆 SPC Results")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Process Mean (μ)", f"{mean:.3f}")
+        m2.metric("Accuracy (Ca)", f"{ca:.3f}", delta="Ideal closer to 0", delta_color="off")
+        m3.metric("Precision (Cp)", f"{cp:.3f}", delta="≥ 1.33 is Good")
+        
+        is_capable = cpk >= 1.33
+        m4.metric("Capability (Cpk)", f"{cpk:.3f}", delta="Capable" if is_capable else "Incapable", delta_color="normal" if is_capable else "inverse")
+
+        st.markdown("---")
+        
+        # Interactive Charts & Data Table
+        tab1, tab2, tab3 = st.tabs(["📊 Distribution Chart", "📈 Trend by Coil", "📋 Detail Data"])
+
+        with tab1:
+            fig_dist = go.Figure()
+
+            # Histogram
+            fig_dist.add_trace(go.Histogram(
+                x=data_series,
+                histnorm='probability density',
+                name='Actual Data',
+                marker_color='#4dabf7',
+                opacity=0.75,
+                xbins=dict(size=(data_series.max() - data_series.min()) / 30 if data_series.max() > data_series.min() else 1)
+            ))
+
+            # Normal Curve
+            if std > 0:
+                x_curve = np.linspace(data_series.min() - 1*std, data_series.max() + 1*std, 500)
+                y_curve = norm.pdf(x_curve, mean, std)
+                fig_dist.add_trace(go.Scatter(
+                    x=x_curve,
+                    y=y_curve,
+                    mode='lines',
+                    name='Normal Curve',
+                    line=dict(color='#343a40', width=3)
+                ))
+
+            # Limits
+            fig_dist.add_vline(x=lsl, line_dash="dash", line_color="#d9534f", annotation_text="LSL", annotation_position="top left")
+            fig_dist.add_vline(x=usl, line_dash="dash", line_color="#d9534f", annotation_text="USL", annotation_position="top right")
+            fig_dist.add_vline(x=target_val, line_color="#5cb85c", line_width=2, annotation_text="Target", annotation_position="top right")
+
+            fig_dist.update_layout(
+                title=f"Process Distribution with Normal Curve: {target_col}",
+                xaxis_title=target_col,
+                yaxis_title="Probability Density",
+                bargap=0.05,
+                hovermode="x unified",
+                legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99)
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+        with tab2:
+            # Trend Chart explicitly using COIL_NO as the X-axis
+            # Muted colors for a more professional look
+            fig_trend = go.Figure()
+
+            # Add Process Data Line
+            fig_trend.add_trace(go.Scatter(
+                x=analysis_df[coil_col],
+                y=analysis_df[target_col],
+                mode='lines+markers',
+                name='Process Data',
+                line=dict(color='#2c3e50', width=2), # Steel Blue
+                marker=dict(size=6, color='#2c3e50')
+            ))
+
+            # Highlight Out of Spec (OOC) points in Red
+            ooc_df = analysis_df[(analysis_df[target_col] < lsl) | (analysis_df[target_col] > usl)]
+            if not ooc_df.empty:
+                fig_trend.add_trace(go.Scatter(
+                    x=ooc_df[coil_col],
+                    y=ooc_df[target_col],
+                    mode='markers',
+                    marker=dict(color='#d9534f', size=10, symbol='x'), # Muted Red
+                    name='Out of Spec (OOC)'
+                ))
+
+            # Add Limits and Mean Lines
+            fig_trend.add_hline(y=mean, line_color="#5bc0de", line_width=1.5, annotation_text="Mean (μ)", annotation_font_color="#5bc0de")
+            fig_trend.add_hline(y=lsl, line_dash="dash", line_color="#d9534f", line_width=1.5, annotation_text="LSL", annotation_font_color="#d9534f")
+            fig_trend.add_hline(y=usl, line_dash="dash", line_color="#d9534f", line_width=1.5, annotation_text="USL", annotation_font_color="#d9534f")
+            
+            # --- FORCE X-AXIS ARRAY ORDER ---
+            fig_trend.update_layout(
+                title=f"Process Trend per Coil: {target_col}",
+                xaxis_title="Coil Number" if coil_col != 'COIL_INDEX' else "Production Sequence",
+                xaxis=dict(
+                    type='category',
+                    categoryorder='array',
+                    categoryarray=analysis_df[coil_col].tolist(),
+                    showgrid=False
+                ),
+                yaxis=dict(showgrid=True, gridcolor='#e0e0e0'),
+                plot_bgcolor='white',
+                hovermode="x unified"
+            )
+            
+            st.plotly_chart(fig_trend, use_container_width=True)
+            
+        with tab3:
+            st.markdown(f"### 📋 Detailed Coil Data for {target_col}")
+            
+            # Create a clean display dataframe
+            display_df = analysis_df[[coil_col, target_col]].copy()
+            
+            # Determine Status
+            display_df['Status'] = 'OK'
+            display_df.loc[display_df[target_col] < lsl, 'Status'] = 'Below LSL'
+            display_df.loc[display_df[target_col] > usl, 'Status'] = 'Above USL'
+            
+            # Function to highlight OOC rows
+            def highlight_ooc(row):
+                if row['Status'] != 'OK':
+                    return ['background-color: #f8d7da'] * len(row) # Light muted red
+                return [''] * len(row)
                 
-                data_series = analysis_df[target_col]
-                
-                if len(data_series) < 2:
-                    st.warning(f"Not enough data for {target_col}.")
-                    continue
-
-                mean = data_series.mean()
-                std = data_series.std()
-                count = len(data_series)
-
-                # Fetch specs
-                target_val = specs[target_col]['tgt']
-                lsl = specs[target_col]['lsl']
-                usl = specs[target_col]['usl']
-
-                # Calculations
-                ca = ((mean - target_val) / ((usl - lsl) / 2)) * 100 if usl != lsl else 0
-                cp = (usl - lsl) / (6 * std) if std > 0 else 0
-                cpk = min((usl - mean) / (3 * std), (mean - lsl) / (3 * std)) if std > 0 else 0
-
-                # Plot Histogram colored by Grade
-                fig = px.histogram(
-                    analysis_df, 
-                    x=target_col, 
-                    color='鋼種',
-                    nbins=20, 
-                    title=f"<b>{target_col} (Overall)</b>",
-                    barmode='stack',
-                    opacity=0.8,
-                    color_discrete_sequence=px.colors.qualitative.Set1
-                )
-                
-                # Add Vertical Lines (LSL, USL, Mean, Target)
-                fig.add_vline(x=lsl, line_width=2.5, line_dash="solid", line_color="#d9534f")
-                fig.add_annotation(x=lsl, y=1, yref='paper', text=f"<b>LSL<br>{lsl:.0f}</b>", showarrow=False, font=dict(color="#d9534f", size=12), xanchor="right", xshift=-5)
-
-                fig.add_vline(x=usl, line_width=2.5, line_dash="solid", line_color="#d9534f")
-                fig.add_annotation(x=usl, y=1, yref='paper', text=f"<b>USL<br>{usl:.0f}</b>", showarrow=False, font=dict(color="#d9534f", size=12), xanchor="left", xshift=5)
-
-                fig.add_vline(x=mean, line_width=2, line_dash="dash", line_color="#0275d8")
-                fig.add_annotation(x=mean, y=0.9, yref='paper', text=f"Mean<br>{mean:.1f}", showarrow=False, font=dict(color="white", size=11), bgcolor="#0275d8", borderpad=2, yshift=10)
-                
-                fig.add_vline(x=target_val, line_width=2, line_dash="dot", line_color="#5cb85c")
-                fig.add_annotation(x=target_val, y=0.8, yref='paper', text=f"TGT<br>{target_val:.1f}", showarrow=False, font=dict(color="white", size=11), bgcolor="#5cb85c", borderpad=2, yshift=10)
-
-                fig.update_layout(
-                    xaxis_title="",
-                    yaxis_title="",
-                    showlegend=True,
-                    legend_title_text="",
-                    legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99, bgcolor="rgba(255,255,255,0.8)", bordercolor="Black", borderwidth=1),
-                    margin=dict(l=20, r=20, t=50, b=20)
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-
-                # --- HTML METRICS CARD ---
-                is_capable = cpk >= 1.33
-                icon = "✅" if is_capable else "❌"
-                status_text = "Capable" if is_capable else "Not Capable"
-                border_color = "#28a745" if is_capable else "#dc3545"
-                
-                card_html = f"""
-                <div style="border: 1px solid #e0e0e0; border-left: 6px solid {border_color}; border-radius: 8px; background-color: #fafafa; padding: 15px; margin-bottom: 30px; box-shadow: 2px 2px 8px rgba(0,0,0,0.05);">
-                    <div style="display: flex; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;">
-                        <span style="font-size: 18px; font-weight: 700; color: {border_color}; min-width: 140px;">{icon} {status_text}</span>
-                        <span style="color: #aaa;">|</span>
-                        <span style="font-family: monospace; font-size: 14px; color: #333;"><b>LSL:</b> {lsl:.0f} &nbsp;&nbsp; <b>USL:</b> {usl:.0f}</span>
-                        <span style="color: #aaa;">|</span>
-                        <span style="font-family: monospace; font-size: 14px; color: #333;"><b>n:</b> {count} &nbsp;&nbsp; <b>Mean:</b></span>
-                    </div>
-                    <div style="font-family: monospace; font-size: 14px; color: #333; margin-bottom: 12px; margin-left: 5px;">
-                        {mean:.2f} &nbsp;&nbsp; <b>Std:</b> {std:.3f}
-                    </div>
-                    <div style="display: flex; gap: 30px; font-family: monospace; font-size: 15px; margin-left: 5px;">
-                        <span style="color: #d9534f; font-weight: bold;">Cpk = {cpk:.3f}</span>
-                        <span style="font-weight: bold; color: #333;">Cp = {cp:.3f}</span>
-                        <span style="font-weight: bold; color: #333;">Ca = {ca:.1f}%</span>
-                    </div>
-                </div>
-                """
-                st.markdown(card_html, unsafe_allow_html=True)
+            st.dataframe(
+                display_df.style.apply(highlight_ooc, axis=1).format({target_col: "{:.3f}"}),
+                use_container_width=True,
+                hide_index=True
+            )
 
     except Exception as e:
         st.error(f"Error processing file: {e}")
