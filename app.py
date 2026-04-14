@@ -33,15 +33,17 @@ if uploaded_file:
         time_cols_for_year = [c for c in ['生產日期', '開始時間', 'Time', 'Date'] if c in df.columns]
         if time_cols_for_year:
             main_time_col = time_cols_for_year[0]
+            # Lấy giá trị năm từ cột thời gian
             df['年度'] = pd.to_datetime(df[main_time_col], errors='coerce').dt.year
+            # Lọc bỏ NaN, chuyển sang số nguyên rồi sang chuỗi để hiển thị đẹp (vd: "2024" thay vì 2024.0)
             valid_years = df['年度'].dropna().astype(int).astype(str).unique().tolist()
-            year_options = sorted(valid_years, reverse=True) 
-            df['年度'] = df['年度'].fillna(-1).astype(int).astype(str) 
+            year_options = sorted(valid_years, reverse=True) # Sắp xếp năm mới nhất lên trên
+            df['年度'] = df['年度'].fillna(-1).astype(int).astype(str) # Điền tạm -1 cho dòng không có ngày tháng
         else:
             df['年度'] = 'N/A'
             year_options = ['N/A']
 
-        # --- 🎛️ GLOBAL FILTERS ---
+        # --- 🎛️ GLOBAL FILTERS (Updated to 4 Columns) ---
         st.markdown("### 🎛️ Global Data Filters")
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         
@@ -71,13 +73,13 @@ if uploaded_file:
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
 
-        # Identify Target Columns
+        # Identify Target Columns (YS, TS, EL, HARDNESS)
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l', 'HARDNESS', 'HRB', 'HRC', 'HV']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
         # 2. Specification Limits Setting
         with st.expander("⚙️ Customer Specification Settings (LSL / USL)", expanded=False):
-            st.info("Các giới hạn đã được tự động điền. Bạn có thể chỉnh sửa nếu cần.")
+            st.info("Các giới hạn YS, TS, EL, HARDNESS đã được tự động điền. Bạn có thể chỉnh sửa nếu cần.")
             specs = {}
             for target in available_targets:
                 def_lsl, def_usl, def_tgt = 0.0, 0.0, 0.0
@@ -120,7 +122,7 @@ if uploaded_file:
                         
                         data_series = analysis_df[target_col]
                         if len(data_series) < 2:
-                            st.warning(f"Không đủ dữ liệu cho {target_col}")
+                            st.warning(f"Not enough data for {target_col}")
                             continue
                         
                         # Basic Stats
@@ -131,22 +133,22 @@ if uploaded_file:
                         # Fetch Specs
                         lsl_in, usl_in, tgt_in = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
                         
-                        # --- SPC LOGIC (TỔNG THỂ) ---
+                        # --- SPC LOGIC ---
                         if lsl_in == 0 and usl_in == 0:
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", "N/A"
                             status_color = "#6c757d"
                             spec_active = False
-                        elif usl_in == 0 and lsl_in > 0: # Min Only
+                        elif usl_in == 0 and lsl_in > 0:
                             cpk = (mean - lsl_in) / (3 * std) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
-                        elif lsl_in == 0 and usl_in > 0: # Max Only
+                        elif lsl_in == 0 and usl_in > 0:
                             cpk = (usl_in - mean) / (3 * std) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
-                        else: # Hai phía
+                        else:
                             ca = ((mean - tgt_in) / ((usl_in - lsl_in) / 2)) * 100 if usl_in != lsl_in else 0
                             cp = (usl_in - lsl_in) / (6 * std) if std > 0 else 0
                             cpk = min((usl_in - mean)/(3*std), (mean - lsl_in)/(3*std)) if std > 0 else 0
@@ -174,7 +176,9 @@ if uploaded_file:
                         
                         fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
-                        
+                        fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
+                        fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
+
                         fig_dist.add_vline(x=ucl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=ucl, y=0.85, yref='paper', text=f"UCL: {ucl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
                         fig_dist.add_vline(x=lcl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
@@ -182,18 +186,18 @@ if uploaded_file:
 
                         fig_dist.update_layout(
                             title=dict(text=f"<b>{target_col} Distribution</b>", x=0.5, xanchor='center'),
-                            height=380, plot_bgcolor='white', margin=dict(l=40, r=40, b=100, t=100),
+                            height=400, plot_bgcolor='white', margin=dict(l=40, r=40, b=100, t=100),
                             legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="center", x=0.5),
                             xaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0'),
                             yaxis=dict(showline=True, linewidth=1, linecolor='black', mirror=True, gridcolor='#F0F0F0')
                         )
                         st.plotly_chart(fig_dist, use_container_width=True)
 
-                        # 2. METRICS CARD (TỔNG THỂ)
+                        # 2. METRICS CARD
                         st.markdown(f"""
-                        <div style="padding:10px; border-radius:8px; border-left: 6px solid {status_color}; background-color:#f8f9fa; margin-bottom:10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-                            <span style="font-size:15px;"><b>Overall Cpk: {cpk_dis}</b> | <b>Cp: {cp_dis}</b> | <b>Ca: {ca_dis}</b></span><br>
-                            <span style="color:#666; font-size:12px;">Mean: {mean:.2f} | Std: {std:.3f} | n: {count}</span>
+                        <div style="padding:12px; border-radius:8px; border-left: 6px solid {status_color}; background-color:#f8f9fa; margin-bottom:15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                            <span style="font-size:16px;"><b>Cpk: {cpk_dis}</b> | <b>Cp: {cp_dis}</b> | <b>Ca: {ca_dis}</b></span><br>
+                            <span style="color:#666; font-size:13px;">Mean: {mean:.2f} | Std: {std:.3f} | n: {count}</span>
                         </div>
                         """, unsafe_allow_html=True)
 
@@ -206,56 +210,17 @@ if uploaded_file:
                         fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}", annotation_position="right")
                         fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}", annotation_position="right")
                         
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()), y=d_max, text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-35, font=dict(color="green"))
+                        fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()), y=d_min, text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=1, ax=0, ay=35, font=dict(color="red"))
+
                         fig_trend.update_layout(
-                            title=dict(text=f"<b>{target_col} Trend</b>", x=0.5, xanchor='center'),
-                            height=300, plot_bgcolor='#F9F9F9', margin=dict(l=40, r=120, t=30, b=40),
+                            title=dict(text=f"<b>{target_col} Trend (Control Limits)</b>", x=0.5, xanchor='center'),
+                            height=350, plot_bgcolor='#F9F9F9', margin=dict(l=40, r=120, t=30, b=60),
                             xaxis=dict(type='category', showgrid=False, linecolor='black', tickangle=45),
                             yaxis=dict(showgrid=True, gridcolor='#E0E0E0', showline=True, linecolor='black')
                         )
                         st.plotly_chart(fig_trend, use_container_width=True)
-
-                        # 4. BẢNG SO SÁNH THEO NĂM (YEAR-OVER-YEAR TABLE)
-                        if '年度' in analysis_df.columns:
-                            yoy_data = []
-                            # Loại bỏ các dòng không có năm hợp lệ
-                            valid_year_df = analysis_df[analysis_df['年度'] != '-1']
-                            years = sorted(valid_year_df['年度'].unique(), reverse=True)
-                            
-                            for y in years:
-                                ydf = valid_year_df[valid_year_df['年度'] == y]
-                                y_mean, y_std, y_count = ydf[target_col].mean(), ydf[target_col].std(), len(ydf)
-                                
-                                # Tính SPC riêng cho từng năm
-                                if lsl_in == 0 and usl_in == 0:
-                                    y_ca_dis, y_cp_dis, y_cpk_dis = "N/A", "N/A", "N/A"
-                                elif usl_in == 0 and lsl_in > 0: 
-                                    y_cpk = (y_mean - lsl_in) / (3 * y_std) if y_std > 0 else 0
-                                    y_ca_dis, y_cp_dis, y_cpk_dis = "N/A", "N/A", f"{y_cpk:.3f}"
-                                elif lsl_in == 0 and usl_in > 0: 
-                                    y_cpk = (usl_in - y_mean) / (3 * y_std) if y_std > 0 else 0
-                                    y_ca_dis, y_cp_dis, y_cpk_dis = "N/A", "N/A", f"{y_cpk:.3f}"
-                                else: 
-                                    y_ca = ((y_mean - tgt_in) / ((usl_in - lsl_in) / 2)) * 100 if usl_in != lsl_in else 0
-                                    y_cp = (usl_in - lsl_in) / (6 * y_std) if y_std > 0 else 0
-                                    y_cpk = min((usl_in - y_mean)/(3*y_std), (y_mean - lsl_in)/(3*y_std)) if y_std > 0 else 0
-                                    y_ca_dis, y_cp_dis, y_cpk_dis = f"{y_ca:.1f}%", f"{y_cp:.3f}", f"{y_cpk:.3f}"
-                                    
-                                yoy_data.append({
-                                    "Năm (年度)": y,
-                                    "n (Mẫu)": y_count,
-                                    "Cpk": y_cpk_dis,
-                                    "Cp": y_cp_dis,
-                                    "Ca": y_ca_dis,
-                                    "Mean": f"{y_mean:.2f}",
-                                    "Std": f"{y_std:.3f}"
-                                })
-                                
-                            if yoy_data:
-                                yoy_df = pd.DataFrame(yoy_data)
-                                st.markdown(f"<p style='font-size:14px; font-weight:bold; color:#1F497D; margin-bottom:5px;'>📊 Bảng So sánh Năng lực theo Năm</p>", unsafe_allow_html=True)
-                                st.dataframe(yoy_df, use_container_width=True, hide_index=True)
-                                
-                        st.markdown("<br><br>", unsafe_allow_html=True)
+                        st.markdown("<br>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Critical Error: {e}")
