@@ -50,13 +50,13 @@ if uploaded_file:
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
 
-        # Identify Target Columns
-        potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l']
+        # Identify Target Columns (Bao gồm YS, TS, EL và HARDNESS)
+        potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l', 'HARDNESS', 'HRB', 'HRC', 'HV']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
         # 2. Specification Limits Setting (Auto-mapping defaults)
         with st.expander("⚙️ Customer Specification Settings (LSL / USL)", expanded=False):
-            st.info("Các giới hạn YS, TS, EL đã được tự động điền theo tiêu chuẩn. Bạn có thể chỉnh sửa nếu cần.")
+            st.info("Các giới hạn YS, TS, EL, HARDNESS đã được tự động điền. Bạn có thể chỉnh sửa nếu cần.")
             specs = {}
             for target in available_targets:
                 # Logic tự động nhận diện mác đo để gán Spec mặc định
@@ -71,6 +71,9 @@ if uploaded_file:
                     def_tgt = (310.0 + 550.0) / 2
                 elif 'EL' in t_upper or 'ELONG' in t_upper:
                     def_lsl, def_usl = 20.0, 0.0 # Min 20, Không có max
+                    def_tgt = 0.0 
+                elif 'HARDNESS' in t_upper or 'HRB' in t_upper or 'HRC' in t_upper or 'HV' in t_upper:
+                    def_lsl, def_usl = 0.0, 78.0 # Chỉ có Max 78, Không có Min
                     def_tgt = 0.0 # Không có Target cho Spec 1 phía
 
                 st.markdown(f"**Settings for {target}**")
@@ -121,7 +124,7 @@ if uploaded_file:
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
                         elif lsl_in == 0 and usl_in > 0:
-                            # Giới hạn 1 phía trên
+                            # Giới hạn 1 phía trên (VD: Max Hardness 78)
                             cpk = (usl_in - mean) / (3 * std) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
