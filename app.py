@@ -29,19 +29,42 @@ if uploaded_file:
         if 'Metallic_Type' in df.columns:
             df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
 
+        # --- EXTRACT YEAR (年度) FROM DATE ---
+        time_cols_for_year = [c for c in ['生產日期', '開始時間', 'Time', 'Date'] if c in df.columns]
+        if time_cols_for_year:
+            main_time_col = time_cols_for_year[0]
+            # Lấy giá trị năm từ cột thời gian
+            df['年度'] = pd.to_datetime(df[main_time_col], errors='coerce').dt.year
+            # Lọc bỏ NaN, chuyển sang số nguyên rồi sang chuỗi để hiển thị đẹp (vd: "2024" thay vì 2024.0)
+            valid_years = df['年度'].dropna().astype(int).astype(str).unique().tolist()
+            year_options = sorted(valid_years, reverse=True) # Sắp xếp năm mới nhất lên trên
+            df['年度'] = df['年度'].fillna(-1).astype(int).astype(str) # Điền tạm -1 cho dòng không có ngày tháng
+        else:
+            df['年度'] = 'N/A'
+            year_options = ['N/A']
+
+        # --- 🎛️ GLOBAL FILTERS (Updated to 4 Columns) ---
         st.markdown("### 🎛️ Global Data Filters")
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         
         with col_f1:
-            lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=df['LINE'].dropna().unique())
+            selected_years = st.multiselect("Year (年度)", options=year_options, default=year_options)
         with col_f2:
-            grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
+            lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=df['LINE'].dropna().unique())
         with col_f3:
+            grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=df['鋼種'].dropna().unique())
+        with col_f4:
             df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
             unique_widths = sorted(df['訂單寬度'].dropna().unique())
             selected_widths = st.multiselect("Order Width (訂單寬度)", options=unique_widths, default=unique_widths)
 
-        filtered_df = df[(df['LINE'].isin(lines)) & (df['鋼種'].isin(grades)) & (df['訂單寬度'].isin(selected_widths))].copy()
+        # APPLY FILTERS
+        filtered_df = df[
+            (df['年度'].isin(selected_years)) &
+            (df['LINE'].isin(lines)) & 
+            (df['鋼種'].isin(grades)) & 
+            (df['訂單寬度'].isin(selected_widths))
+        ].copy()
 
         # --- IDENTIFY COIL COLUMN & SORT ---
         coil_col = next((c for c in ['COIL_NO', 'COIL NO', 'Coil_No', '製造批號', 'Batch'] if c in filtered_df.columns), None)
@@ -50,16 +73,15 @@ if uploaded_file:
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
 
-        # Identify Target Columns (Bao gồm YS, TS, EL và HARDNESS)
+        # Identify Target Columns (YS, TS, EL, HARDNESS)
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l', 'HARDNESS', 'HRB', 'HRC', 'HV']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
 
-        # 2. Specification Limits Setting (Auto-mapping defaults)
+        # 2. Specification Limits Setting
         with st.expander("⚙️ Customer Specification Settings (LSL / USL)", expanded=False):
             st.info("Các giới hạn YS, TS, EL, HARDNESS đã được tự động điền. Bạn có thể chỉnh sửa nếu cần.")
             specs = {}
             for target in available_targets:
-                # Logic tự động nhận diện mác đo để gán Spec mặc định
                 def_lsl, def_usl, def_tgt = 0.0, 0.0, 0.0
                 t_upper = target.upper()
                 
@@ -70,11 +92,11 @@ if uploaded_file:
                     def_lsl, def_usl = 310.0, 550.0
                     def_tgt = (310.0 + 550.0) / 2
                 elif 'EL' in t_upper or 'ELONG' in t_upper:
-                    def_lsl, def_usl = 20.0, 0.0 # Min 20, Không có max
+                    def_lsl, def_usl = 20.0, 0.0 
                     def_tgt = 0.0 
                 elif 'HARDNESS' in t_upper or 'HRB' in t_upper or 'HRC' in t_upper or 'HV' in t_upper:
-                    def_lsl, def_usl = 0.0, 78.0 # Chỉ có Max 78, Không có Min
-                    def_tgt = 0.0 # Không có Target cho Spec 1 phía
+                    def_lsl, def_usl = 0.0, 78.0 
+                    def_tgt = 0.0 
 
                 st.markdown(f"**Settings for {target}**")
                 sc1, sc2, sc3 = st.columns(3)
@@ -111,26 +133,22 @@ if uploaded_file:
                         # Fetch Specs
                         lsl_in, usl_in, tgt_in = specs[target_col]['lsl'], specs[target_col]['usl'], specs[target_col]['tgt']
                         
-                        # --- SPC LOGIC (Xử lý 1 phía và 2 phía) ---
+                        # --- SPC LOGIC ---
                         if lsl_in == 0 and usl_in == 0:
-                            # Không nhập Spec
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", "N/A"
                             status_color = "#6c757d"
                             spec_active = False
                         elif usl_in == 0 and lsl_in > 0:
-                            # Giới hạn 1 phía dưới (VD: EL Min 20)
                             cpk = (mean - lsl_in) / (3 * std) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
                         elif lsl_in == 0 and usl_in > 0:
-                            # Giới hạn 1 phía trên (VD: Max Hardness 78)
                             cpk = (usl_in - mean) / (3 * std) if std > 0 else 0
                             ca_dis, cp_dis, cpk_dis = "N/A", "N/A", f"{cpk:.3f}"
                             status_color = "#28a745" if cpk >= 1.33 else "#dc3545"
                             spec_active = True
                         else:
-                            # Giới hạn 2 phía bình thường (VD: YS, TS)
                             ca = ((mean - tgt_in) / ((usl_in - lsl_in) / 2)) * 100 if usl_in != lsl_in else 0
                             cp = (usl_in - lsl_in) / (6 * std) if std > 0 else 0
                             cpk = min((usl_in - mean)/(3*std), (mean - lsl_in)/(3*std)) if std > 0 else 0
@@ -142,14 +160,12 @@ if uploaded_file:
                         fig_dist = px.histogram(analysis_df, x=target_col, color='鋼種', nbins=20, barmode='stack', color_discrete_sequence=['#1F497D', '#4F81BD', '#8DB4E2'])
                         fig_dist.update_traces(marker_line_color='white', marker_line_width=1, opacity=0.9)
                         
-                        # Normal Curve
                         if std > 0:
                             x_curve = np.linspace(d_min - std, d_max + std, 200)
                             bin_w = (d_max - d_min)/20 if d_max > d_min else 1
                             y_curve = norm.pdf(x_curve, mean, std) * count * bin_w
                             fig_dist.add_trace(go.Scatter(x=x_curve, y=y_curve, mode='lines', line=dict(color='#FFB300', width=2), showlegend=False))
 
-                        # Specification Annotations
                         if spec_active:
                             if lsl_in > 0:
                                 fig_dist.add_vline(x=lsl_in, line_color="red", line_width=2)
@@ -158,13 +174,11 @@ if uploaded_file:
                                 fig_dist.add_vline(x=usl_in, line_color="red", line_width=2)
                                 fig_dist.add_annotation(x=usl_in, y=0.95, yref='paper', text=f"USL: {usl_in:.1f}", showarrow=False, font=dict(color="red", size=10), xanchor="left", xshift=5)
                         
-                        # Mean & Min/Max
                         fig_dist.add_vline(x=mean, line_color="#333", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=mean, y=1.05, yref='paper', text=f"Mean: {mean:.1f}", showarrow=False, font=dict(color="#333", size=10))
                         fig_dist.add_annotation(x=d_max, y=0.05, yref='paper', text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=2, ax=30, ay=-30, font=dict(color="green", size=10))
                         fig_dist.add_annotation(x=d_min, y=0.05, yref='paper', text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=2, ax=-30, ay=-30, font=dict(color="red", size=10))
 
-                        # Thêm UCL/LCL vào Histogram
                         fig_dist.add_vline(x=ucl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
                         fig_dist.add_annotation(x=ucl, y=0.85, yref='paper', text=f"UCL: {ucl:.1f}", showarrow=False, font=dict(color="#FF8C00", size=10))
                         fig_dist.add_vline(x=lcl, line_color="#FF8C00", line_dash="dash", line_width=1.5)
@@ -192,12 +206,10 @@ if uploaded_file:
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
                         
-                        # Control Lines
                         fig_trend.add_hline(y=mean, line_color="#333", line_width=1.5, annotation_text=f"Mean: {mean:.1f}", annotation_position="right")
                         fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}", annotation_position="right")
                         fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}", annotation_position="right")
                         
-                        # Max/Min Markers on Trend
                         fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmax(), coil_col] if coil_col else str(data_series.idxmax()), y=d_max, text=f"Max: {d_max:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-35, font=dict(color="green"))
                         fig_trend.add_annotation(x=analysis_df.loc[data_series.idxmin(), coil_col] if coil_col else str(data_series.idxmin()), y=d_min, text=f"Min: {d_min:.1f}", showarrow=True, arrowhead=1, ax=0, ay=35, font=dict(color="red"))
 
