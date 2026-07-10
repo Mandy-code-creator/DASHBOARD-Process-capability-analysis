@@ -47,14 +47,13 @@ if uploaded_file:
             st.markdown("---")
             st.markdown("**Select Target Properties for SPC Analysis (Mechanical Properties):**")
             
-            # Smart filter to auto-suggest only actual mechanical properties columns
             potential_targets = ['YS', 'TS', 'EL', 'TENSILE', 'YIELD', 'ELONG', 'HARDNESS', 'HRB', 'HRC', 'HV', '強度', '延伸率', '硬度']
             suggested_targets = [c for c in num_cols if any(pt in c.upper() for pt in potential_targets)]
             
             available_targets = st.multiselect(
                 "SPC Target Columns", 
                 options=num_cols, 
-                default=suggested_targets
+                default=suggested_targets if suggested_targets else num_cols[:1]
             )
 
         if not available_targets:
@@ -96,22 +95,27 @@ if uploaded_file:
             df['Year'] = 'N/A'
             year_options = ['N/A']
 
-        # --- 🎛️ GLOBAL FILTERS ---
+        # --- 🎛️ GLOBAL FILTERS (Optimized with st.form to stop lag) ---
         st.markdown("### 🎛️ Global Data Filters")
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         
-        with col_f1:
-            selected_years = st.multiselect("Year", options=year_options, default=year_options)
-        with col_f2:
-            lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=[])
-        with col_f3:
-            grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=[])
-        with col_f4:
-            df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
-            unique_widths = sorted(df['訂單寬度'].dropna().unique())
-            selected_widths = st.multiselect("Order Width / Thickness", options=unique_widths, default=[])
+        with st.form("filter_control_form"):
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+            
+            with col_f1:
+                selected_years = st.multiselect("Year", options=year_options, default=year_options)
+            with col_f2:
+                lines = st.multiselect("Factory Line (LINE)", options=df['LINE'].dropna().unique(), default=[])
+            with col_f3:
+                grades = st.multiselect("Steel Grade (鋼種)", options=df['鋼種'].dropna().unique(), default=[])
+            with col_f4:
+                df['訂單寬度'] = pd.to_numeric(df['訂單寬度'], errors='coerce')
+                unique_widths = sorted(df['訂單寬度'].dropna().unique())
+                selected_widths = st.multiselect("Order Width / Thickness", options=unique_widths, default=[])
+            
+            # Submit button for form execution
+            submit_button = st.form_submit_button(label="⚡ Apply Filters & Run Analysis", type="primary")
 
-        # APPLY FILTERS (Safe mode: empty list means select all data)
+        # APPLY FILTERS (Executes smoothly using safe filters)
         filtered_df = df.copy()
         if selected_years:
             filtered_df = filtered_df[filtered_df['Year'].isin(selected_years)]
@@ -253,18 +257,18 @@ if uploaded_file:
                         </div>
                         """, unsafe_allow_html=True)
 
-                        # --- NEW: DYNAMIC FORMULA REFERENCE EXPANDER ---
+                        # --- DYNAMIC FORMULA REFERENCE EXPANDER ---
                         if spec_active:
                             with st.expander("ℹ️ Formula Reference", expanded=False):
-                                if usl_in == 0 and lsl_in > 0: # Lower bound only
+                                if usl_in == 0 and lsl_in > 0: 
                                     st.latex(r"C_{pk} = C_{pl} = \frac{\mu - LSL}{3\sigma}")
                                     st.caption(f"Calculation: ({mean:.2f} - {lsl_in:.1f}) / (3 * {std:.3f}) = {cpk_dis}")
                                     st.info("Note: Cp and Ca are N/A for single lower specification limit.")
-                                elif lsl_in == 0 and usl_in > 0: # Upper bound only
+                                elif lsl_in == 0 and usl_in > 0: 
                                     st.latex(r"C_{pk} = C_{pu} = \frac{USL - \mu}{3\sigma}")
                                     st.caption(f"Calculation: ({usl_in:.1f} - {mean:.2f}) / (3 * {std:.3f}) = {cpk_dis}")
                                     st.info("Note: Cp and Ca are N/A for single upper specification limit.")
-                                else: # Double bounds
+                                else: 
                                     st.latex(r"C_{pk} = \min\left(\frac{USL - \mu}{3\sigma}, \frac{\mu - LSL}{3\sigma}\right)")
                                     st.latex(r"C_p = \frac{USL - LSL}{6\sigma}, \quad C_a = \frac{\mu - \text{Target}}{\frac{USL - LSL}{2}} \times 100\%")
 
