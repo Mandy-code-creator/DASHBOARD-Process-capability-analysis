@@ -80,12 +80,10 @@ if uploaded_file:
 
         # --- ROBUST EXTRACT YEAR ---
         if actual_time_col in df.columns:
-            # Check if column is already numeric year values like 2024, 2025
             numeric_time = pd.to_numeric(df[actual_time_col], errors='coerce')
             if numeric_time.notna().sum() > 0 and numeric_time.dropna().between(1900, 2100).any():
                 df['Year'] = numeric_time.fillna(-1).astype(int).astype(str)
             else:
-                # Try regex extraction for 4-digit years inside string/date formats
                 extracted_year = df[actual_time_col].astype(str).str.extract(r'(19\d{2}|20\d{2})')[0]
                 if extracted_year.notna().sum() > 0:
                     df['Year'] = extracted_year.fillna('-1')
@@ -174,7 +172,6 @@ if uploaded_file:
                         analysis_df[target_col] = pd.to_numeric(analysis_df[target_col], errors='coerce')
                         analysis_df = analysis_df.dropna(subset=[target_col])
                         
-                        # Apply Coil-level filtering (drop duplicates to eliminate batch errors)
                         if coil_col:
                             analysis_df = analysis_df.drop_duplicates(subset=[coil_col], keep='last')
                         
@@ -256,12 +253,26 @@ if uploaded_file:
                         </div>
                         """, unsafe_allow_html=True)
 
+                        # --- NEW: DYNAMIC FORMULA REFERENCE EXPANDER ---
+                        if spec_active:
+                            with st.expander("ℹ️ Formula Reference", expanded=False):
+                                if usl_in == 0 and lsl_in > 0: # Lower bound only
+                                    st.latex(r"C_{pk} = C_{pl} = \frac{\mu - LSL}{3\sigma}")
+                                    st.caption(f"Calculation: ({mean:.2f} - {lsl_in:.1f}) / (3 * {std:.3f}) = {cpk_dis}")
+                                    st.info("Note: Cp and Ca are N/A for single lower specification limit.")
+                                elif lsl_in == 0 and usl_in > 0: # Upper bound only
+                                    st.latex(r"C_{pk} = C_{pu} = \frac{USL - \mu}{3\sigma}")
+                                    st.caption(f"Calculation: ({usl_in:.1f} - {mean:.2f}) / (3 * {std:.3f}) = {cpk_dis}")
+                                    st.info("Note: Cp and Ca are N/A for single upper specification limit.")
+                                else: # Double bounds
+                                    st.latex(r"C_{pk} = \min\left(\frac{USL - \mu}{3\sigma}, \frac{\mu - LSL}{3\sigma}\right)")
+                                    st.latex(r"C_p = \frac{USL - LSL}{6\sigma}, \quad C_a = \frac{\mu - \text{Target}}{\frac{USL - LSL}{2}} \times 100\%")
+
                         # 3. TRENDING CHART
                         x_axis = analysis_df[coil_col].astype(str) if coil_col else analysis_df.index.astype(str)
                         fig_trend = go.Figure()
                         fig_trend.add_trace(go.Scatter(x=x_axis, y=data_series, mode='lines+markers', line=dict(color='#4F81BD', width=2), marker=dict(size=6, color='white', line=dict(color='#4F81BD', width=2))))
                         
-                        # Reference line color configuration: DeepSkyBlue
                         fig_trend.add_hline(y=mean, line_color="DeepSkyBlue", line_width=2, annotation_text=f"Mean: {mean:.1f}", annotation_position="right")
                         fig_trend.add_hline(y=ucl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"UCL: {ucl:.1f}", annotation_position="right")
                         fig_trend.add_hline(y=lcl, line_color="#FF8C00", line_width=1.5, line_dash="dash", annotation_text=f"LCL: {lcl:.1f}", annotation_position="right")
