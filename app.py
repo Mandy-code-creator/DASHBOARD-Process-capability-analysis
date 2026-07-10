@@ -21,7 +21,43 @@ if uploaded_file:
         else:
             df = pd.read_excel(uploaded_file)
         
-        df.columns = df.columns.str.strip()
+        df.columns = df.columns.astype(str).str.strip()
+
+        # --- DYNAMIC COLUMN MAPPING (Hỗ trợ linh hoạt cho mọi loại file) ---
+        all_cols = df.columns.tolist()
+        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+
+        with st.expander("🔗 Data Column Mapping (Cấu hình khớp dữ liệu file tùy chỉnh)", expanded=False):
+            st.markdown("Hãy chọn các cột tương ứng trong file của bạn để khớp với bộ lọc và logic phân tích của hệ thống:")
+            
+            # Tự động gợi ý cột thông minh dựa trên từ khóa phổ biến
+            default_time = next((c for c in ['生產日期', '開始時間', 'Time', 'Date', 'ngày', 'date'] if c in all_cols), all_cols[0] if all_cols else None)
+            default_line = next((c for c in ['LINE', 'Line', 'dây chuyền', 'line'] if c in all_cols), cat_cols[0] if cat_cols else all_cols[0])
+            default_grade = next((c for c in ['鋼種', 'Grade', 'mác thép', 'grade'] if c in all_cols), cat_cols[1] if len(cat_cols) > 1 else all_cols[0])
+            default_width = next((c for c in ['訂單寬度', 'Width', 'Khổ', 'width'] if c in all_cols), num_cols[0] if num_cols else all_cols[0])
+            default_coil = next((c for c in ['COIL_NO', 'COIL NO', 'Coil_No', '製造批號', 'Batch', 'mã cuộn'] if c in all_cols), all_cols[0] if all_cols else None)
+            
+            m_c1, m_c2, m_c3, m_c4, m_c5 = st.columns(5)
+            with m_c1: time_col_mapped = st.selectbox("Cột Thời gian", options=all_cols, index=all_cols.index(default_time) if default_time in all_cols else 0)
+            with m_c2: line_col_mapped = st.selectbox("Cột Dây chuyền (LINE)", options=all_cols, index=all_cols.index(default_line) if default_line in all_cols else 0)
+            with m_c3: grade_col_mapped = st.selectbox("Cột Mác thép (鋼種)", options=all_cols, index=all_cols.index(default_grade) if default_grade in all_cols else 0)
+            with m_c4: width_col_mapped = st.selectbox("Cột Chiều rộng (訂單寬度)", options=all_cols, index=all_cols.index(default_width) if default_width in all_cols else 0)
+            with m_c5: coil_col_mapped = st.selectbox("Cột Mã cuộn/Lô (COIL NO)", options=all_cols, index=all_cols.index(default_coil) if default_coil in all_cols else 0)
+
+        # Chuyển đổi tên các cột được chọn về chuẩn chung của ứng dụng để bảo toàn logic bên dưới
+        rename_dict = {
+            line_col_mapped: 'LINE',
+            grade_col_mapped: '鋼種',
+            width_col_mapped: '訂單寬度',
+            coil_col_mapped: 'COIL_NO'
+        }
+        # Loại bỏ các cặp giữ nguyên không đổi để tránh xung đột trùng tên
+        rename_dict = {k: v for k, v in rename_dict.items() if k in df.columns}
+        df = df.rename(columns=rename_dict)
+
+        # Xác định lại tên chính xác của cột thời gian sau khi tiến hành đổi tên cấu trúc
+        actual_time_col = rename_dict.get(time_col_mapped, time_col_mapped)
 
         # --- DATA CORRECTIONS (Based on factory rules) ---
         if '鋼種' in df.columns:
@@ -30,7 +66,7 @@ if uploaded_file:
             df = df[df['Metallic_Type'].astype(str).str.strip().str.upper() != 'GF']
 
         # --- EXTRACT YEAR FROM DATE ---
-        time_cols_for_year = [c for c in ['生產日期', '開始時間', 'Time', 'Date'] if c in df.columns]
+        time_cols_for_year = [c for c in [actual_time_col, '生產日期', '開始時間', 'Time', 'Date'] if c in df.columns]
         if time_cols_for_year:
             main_time_col = time_cols_for_year[0]
             df['Year'] = pd.to_datetime(df[main_time_col], errors='coerce').dt.year
@@ -66,7 +102,7 @@ if uploaded_file:
 
         # --- IDENTIFY COIL COLUMN & SORT ---
         coil_col = next((c for c in ['COIL_NO', 'COIL NO', 'Coil_No', '製造批號', 'Batch'] if c in filtered_df.columns), None)
-        time_cols = [c for c in ['生產日期', '開始時間', 'Time', 'Date'] if c in filtered_df.columns]
+        time_cols = [c for c in [actual_time_col, '生產日期', '開始時間', 'Time', 'Date'] if c in filtered_df.columns]
         sort_cols = time_cols + ([coil_col] if coil_col else [])
         if sort_cols:
             filtered_df = filtered_df.sort_values(by=sort_cols).reset_index(drop=True)
@@ -74,6 +110,11 @@ if uploaded_file:
         # Identify Target Columns
         potential_targets = ['YS', 'TS', 'EL', 'TENSILE_YIELD', 'TENSILE_TENSILE', 'TENSILE_ELONG', 'skp+t/l', 'HARDNESS', 'HRB', 'HRC', 'HV']
         available_targets = [c for c in potential_targets if c in filtered_df.columns]
+        
+        # Nếu là file lạ hoàn toàn và không dính từ khóa mẫu, tự động quét toàn bộ cột số để đưa vào phân tích
+        if not available_targets:
+            available_targets = filtered_df.select_dtypes(include=[np.number]).columns.tolist()
+            available_targets = [c for c in available_targets if c not in ['訂單寬度', 'Year']]
 
         # 2. Specification Limits Setting
         with st.expander("⚙️ Customer Specification Settings (LSL / USL)", expanded=False):
@@ -158,7 +199,7 @@ if uploaded_file:
                             spec_active = True
 
                         # 1. DISTRIBUTION CHART
-                        fig_dist = px.histogram(analysis_df, x=target_col, color='鋼種', nbins=20, barmode='stack', color_discrete_sequence=['#1F497D', '#4F81BD', '#8DB4E2'])
+                        fig_dist = px.histogram(analysis_df, x=target_col, color='鋼種' if '鋼種' in analysis_df.columns else None, nbins=20, barmode='stack', color_discrete_sequence=['#1F497D', '#4F81BD', '#8DB4E2'])
                         fig_dist.update_traces(marker_line_color='white', marker_line_width=1, opacity=0.9)
                         
                         if std > 0:
@@ -261,7 +302,6 @@ if uploaded_file:
             st.markdown("Consolidated process capability metrics across all target properties and years.")
             
             master_df = pd.DataFrame(master_summary_data)
-            # Sort the table to show properties grouped together, then by Year descending
             master_df = master_df.sort_values(by=["Target Property", "Year"], ascending=[True, False]).reset_index(drop=True)
             
             st.dataframe(master_df, use_container_width=True, hide_index=True)
